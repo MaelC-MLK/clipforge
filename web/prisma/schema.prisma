@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Les statuts sont des String (pas des enums) : le worker Python écrit dans ces tables en SQL brut.
+
+model User {
+  id               String   @id @default(cuid())
+  keyHash          String   @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
+  keyEncrypted     String // AES-256-GCM, base64(iv | chiffré | tag)
+  recoveryEmail    String?
+  monthlyBudgetUsd Float    @default(20)
+  storageQuotaGb   Float    @default(20)
+  createdAt        DateTime @default(now())
+  sessions         Session[]
+  sources          Source[]
+  jobs             Job[]
+  usages           Usage[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+}
+
+model Source {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String // youtube | twitch | kick | other | upload
+  url       String?
+  title     String
+  duration  Float? // secondes
+  filePath  String? // relatif à DATA_DIR
+  proxyPath String? // relatif à DATA_DIR
+  sizeBytes BigInt   @default(0)
+  status    String // downloading | analyzing | ready | error
+  error     String?
+  createdAt DateTime @default(now())
+  jobs      Job[]
+
+  @@index([userId])
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String?
+  source    Source?  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  type      String // ingest
+  payload   Json
+  status    String   @default("queued") // queued | running | done | failed
+  progress  Int      @default(0) // 0-100
+  attempts  Int      @default(0)
+  runAt     DateTime @default(now())
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  @@index([status, runAt])
+}
+
+// Une ligne par appel Claude (alimentée à partir de la phase 4).
+model Usage {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float
+  createdAt    DateTime @default(now())
+
+  @@index([userId, createdAt])
+}

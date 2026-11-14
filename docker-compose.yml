@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: clipforge
+      POSTGRES_PASSWORD: clipforge
+      POSTGRES_DB: clipforge
+    ports:
+      - "5432:5432" # pour lancer le web hors Docker en développement
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipforge"]
+      interval: 3s
+      retries: 20
+
+  web:
+    build: ./web
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://clipforge:clipforge@postgres:5432/clipforge
+      DATA_DIR: /data
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: # prêt = migrations appliquées et serveur démarré
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+
+  worker:
+    build: ./worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://clipforge:clipforge@postgres:5432/clipforge
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    depends_on:
+      web: # le web crée les tables au démarrage
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
