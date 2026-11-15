@@ -2,8 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { sanitizeEdit } from "@/lib/edit";
-import { listClips, listMusic, listReadySources, listTemplates } from "@/lib/storage";
+import { listMusic, listReadySources, listTemplates, sourceState } from "@/lib/storage";
 import { Editor } from "./editor";
 
 export default async function SourcePage({ params }: { params: Promise<{ id: string }> }) {
@@ -21,7 +22,9 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
       <Editor
         sourceId={source.id}
         duration={source.duration ?? 0}
-        initial={await listClips(user.id, source.id)}
+        initial={await sourceState(user.id, source.id)}
+        estimateUsd={estimateAnalysisUsd(source.duration ?? 0)}
+        budgetLeftUsd={Math.max(user.monthlyBudgetUsd - (await monthSpentUsd(user.id)), 0)}
         musicFiles={await listMusic(user.id)}
         sources={(await listReadySources(user.id)).filter((s) => s.id !== source.id)}
         templates={(await listTemplates(user.id)).map((t) => ({ id: t.id, name: t.name, edit: sanitizeEdit(t.edit) }))}

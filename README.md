@@ -2,11 +2,12 @@
 
 Studio de clipping : importer une VOD ou une vidéo, repérer les meilleurs moments, monter des clips verticaux et les publier.
 
-État actuel : **phase 3**.
+État actuel : **phase 4**.
 
 - Phase 1 (socle) : connexion par clé Claude, import par URL ou par fichier, file de jobs, bibliothèque avec progression en temps réel, page Utilisation.
 - Phase 2 (clip de base) : découpe d'un extrait, recadrage vertical 9:16, sous-titres karaoké mot par mot, voix de synthèse en option, musique de fond, rendu 1080x1920 H.264/AAC, export SRT.
 - Phase 3 (éditeur complet) : cadrage manuel par images clés, split facecam/jeu, vidéo secondaire empilée, styles de sous-titres et correction du texte, accroche, filigrane, barre de progression, zoom sur les pics sonores, coupe des silences, normalisation du volume, miniature, templates, aperçu vertical en direct.
+- Phase 4 (détection) : score des meilleurs moments par tranche de 10 secondes (volume sonore, « Most replayed » de YouTube, clips des viewers Twitch, lecture du transcript par Claude), heatmap cliquable, clips candidats à charger dans l'éditeur ou à rejeter, coût Claude estimé avant et compté après.
 
 ## Architecture
 
@@ -42,6 +43,24 @@ Les réglages d'un clip sont un objet JSON (`Clip.edit`), décrit et validé dan
 Un clip rendu peut être refait : avec d'autres réglages, avec des sous-titres corrigés, ou en appliquant les réglages actuels à tous les clips de la source. Un **template** enregistre les réglages (sans les images clés, propres à un clip) pour les recharger plus tard.
 
 La logique pure (cadre, silences, pics, texte, commandes FFmpeg) est dans `worker/render.py`, testée dans `worker/test_worker.py`. La validation des réglages est testée dans `web/lib/edit.test.ts`.
+
+## Détection des meilleurs moments
+
+Sur la page d'une source, « Analyser cette vidéo » lance un job `analyze`. Chaque signal disponible donne une valeur de 0 à 1 par tranche de 10 secondes ; le score (0 à 100) est leur moyenne pondérée.
+
+| Signal | Source | Poids |
+| --- | --- | --- |
+| Claude | lit le transcript complet, par tranches de 25 minutes, et propose des moments avec titre, raison et note | 0,40 |
+| « Most replayed » | courbe de YouTube, lue par yt-dlp quand elle existe | 0,35 |
+| Clips des viewers | API officielle Twitch (Helix), si `TWITCH_CLIENT_ID` et `TWITCH_CLIENT_SECRET` sont renseignés | 0,30 |
+| Volume sonore | pics de volume (cris, rires), toujours disponible | 0,20 |
+
+- **Sans Claude** : gratuit, quelques secondes. Les candidats sont les pics du score.
+- **Avec Claude** (case à cocher) : la source est d'abord transcrite en entier sur le serveur (compter à peu près sa durée), puis Claude lit le transcript avec la clé de l'utilisateur. Le coût estimé est affiché avant ; l'analyse est refusée s'il dépasse le budget mensuel restant, et s'arrête si le budget est atteint en cours de route. Chaque appel est enregistré dans `Usage` et apparaît dans Compte. Le transcript est gardé : relancer l'analyse ne retranscrit pas.
+- Le modèle est `claude-opus-5-5` par défaut ; `CLAUDE_MODEL` dans `.env` permet d'en choisir un autre (`claude-sonnet-5-5`, `claude-haiku-5-5`). Les prix servant aux estimations sont dans `web/lib/cost.ts` et `worker/detect.py` : à mettre à jour si Anthropic les change.
+- Twitch et Kick n'exposent pas de vraie courbe des moments les plus regardés. Le score y est une approximation, et l'interface le dit.
+
+La logique pure (cases, normalisation, score, choix des pics, coût) est dans `worker/detect.py`, testée dans `worker/test_worker.py`.
 
 ## Lancer
 
@@ -98,7 +117,10 @@ Le même vecteur de chiffrement est vérifié des deux côtés : ce que le web c
 ## Limites connues
 
 - L'email de récupération est enregistré, mais l'envoi du lien de récupération n'existe pas encore.
-- Le coût Claude affiché reste à zéro tant que les analyses (phase 4) ne sont pas en place.
+- Le coût Claude affiché est une estimation calculée à partir des tokens consommés, pas la facture d'Anthropic.
+- Densité du chat Twitch / Kick : pas prise en compte. Aucune API officielle ne donne le chat d'une rediffusion.
+- Clips des viewers Twitch : code écrit d'après la documentation Helix, jamais exécuté contre la vraie API (il faut des identifiants d'application Twitch).
+- Signal sonore : volume seulement, pas de reconnaissance des rires ou des cris.
 - Un seul worker. Pour en lancer plusieurs, voir le commentaire `shortcut` dans `worker/worker.py`.
 - Stockage sur disque local uniquement (S3 prévu en phase 6).
 - Suivi du visage : détecteur Haar d'OpenCV, fiable sur les visages de face. Sans visage détecté, le cadre reste centré.

@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { CROPS, DEFAULT_EDIT, type Edit, FONTS, keyframeX, POSITIONS, PRESETS, type Word } from "@/lib/edit";
-import type { ClipRow } from "@/lib/storage";
+import type { SourceState } from "@/lib/storage";
 import { MAX_CLIP_SECONDS, MUSIC_EXT } from "@/lib/upload";
+import { Moments } from "./moments";
 import { createClip, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate } from "../../../actions";
 
 const CROP_LABELS: Record<(typeof CROPS)[number], string> = {
@@ -199,20 +200,25 @@ export function Editor({
   sourceId,
   duration,
   initial,
+  estimateUsd,
+  budgetLeftUsd,
   musicFiles,
   sources,
   templates,
 }: {
   sourceId: string;
   duration: number;
-  initial: ClipRow[];
+  initial: SourceState;
+  estimateUsd: number;
+  budgetLeftUsd: number;
   musicFiles: string[];
   sources: { id: string; title: string }[];
   templates: { id: string; name: string; edit: Edit }[];
 }) {
   const router = useRouter();
   const video = useRef<HTMLVideoElement>(null);
-  const [clips, setClips] = useState(initial);
+  const [state, setState] = useState(initial);
+  const clips = state.clips;
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(Math.min(30, duration));
   const [title, setTitle] = useState("");
@@ -226,10 +232,10 @@ export function Editor({
   const [playing, setPlaying] = useState<string | null>(null);
   const [editingWords, setEditingWords] = useState<string | null>(null);
 
-  // Progression des rendus en temps réel.
+  // Rendus, analyse et moments proposés, en temps réel.
   useEffect(() => {
     const events = new EventSource(`/api/events?source=${sourceId}`);
-    events.onmessage = (e) => setClips(JSON.parse(e.data));
+    events.onmessage = (e) => setState(JSON.parse(e.data));
     return () => events.close();
   }, [sourceId]);
 
@@ -294,6 +300,23 @@ export function Editor({
           <video ref={video} className="w-full rounded bg-black" src={`/api/sources/${sourceId}/video`} controls />
           <Preview video={video} edit={edit} start={start} end={end} manualX={manualX} />
         </div>
+
+        <Moments
+          sourceId={sourceId}
+          duration={duration}
+          state={state}
+          estimateUsd={estimateUsd}
+          budgetLeftUsd={budgetLeftUsd}
+          onSeek={(t) => {
+            if (video.current) video.current.currentTime = t;
+          }}
+          onPick={(c) => {
+            setStart(Math.round(c.start * 10) / 10);
+            setEnd(Math.round(c.end * 10) / 10);
+            setTitle(c.title);
+            if (video.current) video.current.currentTime = c.start;
+          }}
+        />
 
         <Section title="Découpe" open>
           <div className="grid grid-cols-2 gap-4">

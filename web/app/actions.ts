@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSession, destroySession, requireUser } from "@/lib/auth";
 import { checkKey } from "@/lib/claude";
+import { estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { encrypt, hashKey } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
@@ -221,4 +222,28 @@ export async function deleteMusic(name: string) {
   const user = await requireUser();
   // Seulement un nom présent dans sa bibliothèque : jamais de chemin fourni par le navigateur.
   if ((await listMusic(user.id)).includes(name)) await rm(abs(`${user.id}/music/${name}`), { force: true });
+}
+
+/** Lance la détection des meilleurs moments. Avec Claude : vérifie d'abord que le coût estimé tient dans le budget du mois. */
+export async function analyzeSource(sourceId: string, claude: boolean): Promise<FormState> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(sourceId), userId: user.id, status: "ready" } });
+  if (!source) return { error: "Source introuvable ou pas encore prête." };
+  if (await db.job.findFirst({ where: { userId: user.id, sourceId: source.id, type: "analyze", status: { in: ["queued", "running"] } } }))
+    return { error: "Une analyse est déjà en cours pour cette vidéo." };
+  if (claude) {
+    const estimate = estimateAnalysisUsd(source.duration ?? 0);
+    const left = user.monthlyBudgetUsd - (await monthSpentUsd(user.id));
+    if (estimate > left)
+      return { error: `Coût estimé ${estimate.toFixed(2)} $, budget restant ${Math.max(left, 0).toFixed(2)} $. Augmente ton budget dans Compte.` };
+  }
+  await db.job.create({
+    data: { userId: user.id, sourceId: source.id, type: "analyze", payload: { sourceId: source.id, claude: Boolean(claude) } },
+  });
+  return { ok: "Analyse lancée." };
+}
+
+export async function deleteCandidate(id: string) {
+  const user = await requireUser();
+  await db.candidate.deleteMany({ where: { id, userId: user.id } });
 }

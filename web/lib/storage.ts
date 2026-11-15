@@ -71,4 +71,25 @@ export const listReadySources = (userId: string) =>
 export const listTemplates = (userId: string) =>
   db.template.findMany({ where: { userId }, orderBy: { name: "asc" }, select: { id: true, name: true, edit: true } });
 
+/** Tout ce que la page d'une source suit en direct : clips, analyse, moments proposés. */
+export async function sourceState(userId: string, sourceId: string) {
+  const [clips, analysis, job, candidates] = await Promise.all([
+    listClips(userId, sourceId),
+    db.analysis.findFirst({ where: { sourceId, userId }, select: { scores: true, notes: true } }),
+    db.job.findFirst({ where: { userId, sourceId, type: "analyze" }, orderBy: { createdAt: "desc" } }),
+    db.candidate.findMany({ where: { userId, sourceId }, orderBy: { score: "desc" } }),
+  ]);
+  return {
+    clips,
+    analysis: {
+      scores: (analysis?.scores ?? []) as number[],
+      notes: (analysis?.notes ?? []) as string[],
+      job: job && { status: job.status, progress: job.progress, error: job.error },
+    },
+    candidates: candidates.map((c) => ({ id: c.id, start: c.start, end: c.end, score: c.score, title: c.title, reason: c.reason, origin: c.origin })),
+  };
+}
+
+export type SourceState = Awaited<ReturnType<typeof sourceState>>;
+
 export type ClipRow = Awaited<ReturnType<typeof listClips>>[number];

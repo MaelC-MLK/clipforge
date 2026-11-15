@@ -4,3 +4,4 @@ cryptography
 faster-whisper
 opencv-python-headless<5  # la v5 n'inclut plus le détecteur Haar utilisé par track_face
 piper-tts
+anthropic

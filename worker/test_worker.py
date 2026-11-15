@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from crypto import decrypt
+from detect import (bucket_mean, build_candidates, clean_moments, combine, cost_usd, estimate_cost, format_slice,
+                    mean_score, normalize, pick_moments, slices, spread, why)
 from render import (build_ass, build_srt, crop_size, crop_x_expr, group_lines, keep_intervals, loud_peaks, remap_time,
                     remap_words, render_cmd, select_expr, smooth, speech_segments, voice_cmd)
 from worker import Fatal, check_duration, proxy_cmd
@@ -238,6 +240,88 @@ class VoiceTest(unittest.TestCase):
             "[s0][s1][s2]amix=inputs=3:normalize=0,apad[a]",
         )
         self.assertEqual(cmd[cmd.index("-t") + 1], "12.000")
+
+
+class DetectTest(unittest.TestCase):
+    def test_cases_de_dix_secondes(self):
+        self.assertEqual(bucket_mean([1.0] * 10 + [3.0] * 5), [1.0, 3.0])  # dernière case incomplète : moyenne de ce qui existe
+        # Un intervalle touche toutes les cases qu'il recouvre ; la plus forte valeur gagne.
+        self.assertEqual(spread([(5, 25, 0.5), (20, 30, 0.9), (95, 200, 1)], 4), [0.5, 0.5, 0.9, 0.0])
+        self.assertEqual(spread([(10, 10, 1)], 3), [0.0, 1, 0.0])  # intervalle de durée nulle
+
+    def test_normalisation(self):
+        self.assertEqual(normalize([2, 2, 2, 4, 6]), [0, 0, 0, 0.5, 1])  # 0 = niveau habituel, 1 = maximum
+        self.assertEqual(normalize([3, 3, 3]), [0, 0, 0])  # signal plat
+        self.assertEqual(normalize([]), [])
+
+    def test_score_combine(self):
+        # Un seul signal : il porte tout le score.
+        self.assertEqual(combine({"audio": [0, 0.5, 1]}), [0, 50, 100])
+        # Deux signaux : moyenne pondérée (heatmap 0,35, audio 0,2), poids ramenés à 1.
+        self.assertEqual(combine({"audio": [1, 0], "heatmap": [0, 1]}), [36, 64])
+        # Signal vide ou inconnu ignoré ; signaux de longueurs différentes complétés par 0.
+        self.assertEqual(combine({"audio": [1, 1], "heatmap": [], "inconnu": [1, 1]}), [100, 100])
+        self.assertEqual(combine({"audio": [1], "heatmap": [1, 1]}), [100, 64])
+        self.assertEqual(combine({}), [])
+
+    def test_choix_des_pics(self):
+        scores = [0] * 60
+        scores[10], scores[11], scores[40] = 90, 80, 50  # 100 s, son voisin, 400 s
+        self.assertEqual(pick_moments(scores, 5), [(80.0, 120.0, 90), (380.0, 420.0, 50)])  # voisin trop proche ignoré, zéros ignorés
+        self.assertEqual(pick_moments(scores, 1), [(80.0, 120.0, 90)])
+        self.assertEqual(pick_moments([70, 0], 3), [(0.0, 20.0, 70)])  # bornes dans la vidéo
+        # L'écart se mesure entre les pics, pas entre les débuts de clips ramenés à zéro.
+        self.assertEqual([m[2] for m in pick_moments([70, 0, 0, 0, 0, 0, 60], 3)], [70, 60])
+        self.assertEqual(mean_score(scores, 100, 120), 85)
+
+    def test_raison_d_un_pic(self):
+        signals = {"audio": [0.9, 0.1], "heatmap": [0.5, 0.0], "clips": [0.1, 0.1]}
+        self.assertEqual(why(signals, 0, 10), "Pic sonore, très rejoué sur youtube".capitalize())
+        self.assertEqual(why(signals, 10, 20), "Moment au-dessus de la moyenne")
+
+    def test_tranches_du_transcript(self):
+        transcript = [(0, "a"), (1499, "b"), (1500, "c"), (4000, "d")]
+        self.assertEqual(slices(transcript), [[(0, "a"), (1499, "b")], [(1500, "c")], [(4000, "d")]])  # 25 min, tranches vides sautées
+        self.assertEqual(format_slice([(12.4, "Salut"), (75, "ça va")]), "[12] Salut\n[75] ça va")
+
+    def test_moments_de_claude_valides(self):
+        raw = [
+            {"start": 100, "end": 160, "score": 150, "title": " Le clash ", "reason": "Ça monte vite."},
+            {"start": 90, "end": 95, "score": 50, "title": "trop court", "reason": ""},
+            {"start": 200, "end": 900, "score": 40, "title": "", "reason": "x"},  # trop long, sans titre
+            {"start": "n'importe quoi", "end": 5, "score": 1},
+            {"start": 0, "end": 3000, "score": 10, "title": "hors tranche", "reason": ""},
+        ]
+        self.assertEqual(clean_moments(raw, 50, 1000), [
+            {"start": 100.0, "end": 160.0, "score": 100, "title": "Le clash", "reason": "Ça monte vite."},
+            {"start": 200.0, "end": 380.0, "score": 40, "title": "Moment à 0:03:20", "reason": "x"},
+            {"start": 50.0, "end": 230.0, "score": 10, "title": "hors tranche", "reason": ""},
+        ])
+
+    def test_candidats(self):
+        scores = [0] * 120  # 20 minutes
+        scores[10], scores[60] = 80, 60
+        signals = {"audio": [0.0] * 120}
+        signals["audio"][10] = signals["audio"][60] = 1.0
+        moments = [{"start": 590.0, "end": 630.0, "score": 90, "title": "Blague", "reason": "Chute nette."}]
+        out = build_candidates(scores, signals, moments, 1200)
+        # Le pic à 600 s recoupe le moment de Claude : il n'est pas proposé deux fois.
+        self.assertEqual([(c["origin"], c["start"], c["title"]) for c in out], [("signals", 80.0, "Moment fort à 0:01:20"), ("claude", 590.0, "Blague")])
+        self.assertEqual(out[0]["reason"], "Pic sonore")
+        self.assertEqual(out[1]["score"], round((90 + 60 / 4) / 2))  # moyenne entre l'avis de Claude et les signaux
+        self.assertEqual(build_candidates([], {}, [], 0), [])
+        # Un moment de Claude qui couvre les meilleures cases ne prend pas la place des autres pics.
+        wide = build_candidates([70, 53, 53, 53, 13, 33, 0], {"audio": [0, 0, 0, 0, 0, 1, 0]},
+                                [{"start": 5.0, "end": 44.0, "score": 80, "title": "x", "reason": "y"}], 70)
+        self.assertEqual([(c["origin"], c["start"]) for c in wide], [("claude", 5.0), ("signals", 30.0)])
+
+    def test_cout_claude(self):
+        self.assertAlmostEqual(cost_usd("claude-opus-5-5", 1_000_000, 100_000), 6.0)
+        self.assertAlmostEqual(cost_usd("claude-haiku-5-5", 1_000_000, 0), 0.1)
+        self.assertAlmostEqual(cost_usd("modele-inconnu", 1_000_000, 0), 4.0)  # prix du modèle par défaut
+        # 1 h : 3 tranches de 25 min, 15 600 + 1 500 tokens en entrée, 9 000 en sortie.
+        self.assertAlmostEqual(estimate_cost(3600, "claude-opus-5-5"), (17100 * 4 + 9000 * 20) / 1e6)
+        self.assertGreater(estimate_cost(1, "claude-opus-5-5"), 0)
 
 
 if __name__ == "__main__":

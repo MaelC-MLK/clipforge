@@ -10,14 +10,16 @@ datasource db {
 // Les statuts sont des String (pas des enums) : le worker Python écrit dans ces tables en SQL brut.
 
 model User {
+  analyses         Analysis[]
+  candidates       Candidate[]
   templates        Template[]
-  id               String     @id @default(cuid())
-  keyHash          String     @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
+  id               String      @id @default(cuid())
+  keyHash          String      @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
   keyEncrypted     String // AES-256-GCM, base64(iv | chiffré | tag)
   recoveryEmail    String?
-  monthlyBudgetUsd Float      @default(20)
-  storageQuotaGb   Float      @default(20)
-  createdAt        DateTime   @default(now())
+  monthlyBudgetUsd Float       @default(20)
+  storageQuotaGb   Float       @default(20)
+  createdAt        DateTime    @default(now())
   sessions         Session[]
   sources          Source[]
   clips            Clip[]
@@ -34,21 +36,23 @@ model Session {
 }
 
 model Source {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind      String // youtube | twitch | kick | other | upload
-  url       String?
-  title     String
-  duration  Float? // secondes
-  filePath  String? // relatif à DATA_DIR
-  proxyPath String? // relatif à DATA_DIR
-  sizeBytes BigInt   @default(0)
-  status    String // downloading | analyzing | ready | error
-  error     String?
-  createdAt DateTime @default(now())
-  jobs      Job[]
-  clips     Clip[]
+  analysis   Analysis?
+  candidates Candidate[]
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind       String // youtube | twitch | kick | other | upload
+  url        String?
+  title      String
+  duration   Float? // secondes
+  filePath   String? // relatif à DATA_DIR
+  proxyPath  String? // relatif à DATA_DIR
+  sizeBytes  BigInt      @default(0)
+  status     String // downloading | analyzing | ready | error
+  error      String?
+  createdAt  DateTime    @default(now())
+  jobs       Job[]
+  clips      Clip[]
 
   @@index([userId])
 }
@@ -84,7 +88,7 @@ model Job {
   source    Source?  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   clipId    String?
   clip      Clip?    @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  type      String // ingest | render
+  type      String // ingest | render | analyze
   payload   Json
   status    String   @default("queued") // queued | running | done | failed
   progress  Int      @default(0) // 0-100
@@ -121,4 +125,35 @@ model Template {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+// Résultat de la détection des meilleurs moments d'une source (une ligne par source, écrite par le worker).
+model Analysis {
+  sourceId   String   @id
+  source     Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transcript Json? // [[instant, phrase]] de toute la source, gardé pour ne pas retranscrire
+  signals    Json // { audio | heatmap | clips | claude: [0 à 1 par tranche de 10 s] }
+  scores     Json // [0 à 100 par tranche de 10 s]
+  notes      Json // messages affichés à l'utilisateur (signal indisponible, budget atteint…)
+  updatedAt  DateTime @default(now())
+}
+
+// Clip proposé par la détection. L'utilisateur le charge dans l'éditeur ou le rejette (suppression).
+model Candidate {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId  String
+  source    Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  start     Float
+  end       Float
+  score     Int // 0 à 100, indicatif
+  title     String
+  reason    String
+  origin    String // claude | signals
+  createdAt DateTime @default(now())
+
+  @@index([sourceId])
 }

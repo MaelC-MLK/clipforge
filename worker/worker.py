@@ -1,12 +1,19 @@
 """Worker ClipForge : prend les jobs dans la table "Job" de Postgres et les exécute un par un."""
 
+import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
 import traceback
+import urllib.parse
+import urllib.request
+import uuid
 import wave
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psycopg
@@ -14,6 +21,9 @@ import yt_dlp
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from crypto import decrypt
+from detect import (BUCKET, bucket_mean, build_candidates, clean_moments, combine, cost_usd, format_slice,
+                    normalize, slices, spread)
 from render import (build_ass, build_srt, keep_intervals, loud_peaks, remap_words, render_cmd, smooth,
                     speech_segments, thumb_cmd, voice_cmd)
 
@@ -21,6 +31,7 @@ DATA = Path(os.environ.get("DATA_DIR", "/data"))
 MAX_HOURS = float(os.environ.get("MAX_SOURCE_HOURS", "8"))
 MAX_ATTEMPTS = 3
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-opus-5-5"
 
 # Prisma stocke les dates en UTC sans fuseau.
 NOW = "(now() at time zone 'utc')"
@@ -361,7 +372,237 @@ def render(conn, job):
         shutil.rmtree(folder, ignore_errors=True)
 
 
-HANDLERS = {"ingest": ingest, "render": render}
+def audio_per_second(file: Path, duration: float, on_progress) -> list[float]:
+    """Volume (RMS) de chaque seconde de la source, lu au fil de l'eau : rien n'est écrit sur le disque."""
+    import numpy as np
+
+    process = subprocess.Popen(
+        ["ffmpeg", "-loglevel", "error", "-i", str(file), "-vn", "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    out = []
+    while chunk := process.stdout.read(16000):  # une seconde : 8000 échantillons de 2 octets
+        samples = np.frombuffer(chunk[:len(chunk) // 2 * 2], np.int16).astype(np.float32) / 32768
+        out.append(float(np.sqrt(np.mean(samples ** 2))) if len(samples) else 0.0)
+        if len(out) % 60 == 0 and duration:
+            on_progress(len(out) / duration)
+    process.wait()
+    return out
+
+
+def youtube_heatmap(url: str) -> list[tuple[float, float, float]]:
+    """Courbe « Most replayed » de YouTube : (début, fin, valeur). Vide si YouTube n'en fournit pas."""
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "noplaylist": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return [(h["start_time"], h["end_time"], h["value"]) for h in info.get("heatmap") or []]
+
+
+def twitch_clips(url: str) -> list[tuple[float, float, float]] | None:
+    """Clips créés par les viewers sur une VOD Twitch, via l'API officielle Helix : (début, fin, poids).
+
+    None si TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET ne sont pas configurés ou si l'URL n'est pas une VOD.
+    """
+    client_id, secret = os.environ.get("TWITCH_CLIENT_ID"), os.environ.get("TWITCH_CLIENT_SECRET")
+    vod = re.search(r"/videos/(\d+)", url)
+    if not client_id or not secret or not vod:
+        return None
+
+    def call(target: str, params: dict, headers: dict | None = None, post: bool = False) -> dict:
+        query = urllib.parse.urlencode(params)
+        request = urllib.request.Request(target if post else f"{target}?{query}", data=query.encode() if post else None, headers=headers or {})
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.load(response)
+
+    token = call("https://id.twitch.tv/oauth2/token", {"client_id": client_id, "client_secret": secret, "grant_type": "client_credentials"}, post=True)
+    auth = {"Client-Id": client_id, "Authorization": f"Bearer {token['access_token']}"}
+    videos = call("https://api.twitch.tv/helix/videos", {"id": vod.group(1)}, auth)["data"]
+    if not videos:
+        return []
+    created = datetime.fromisoformat(videos[0]["created_at"].replace("Z", "+00:00"))
+    # Les clips sont filtrés par date de création : on prend la semaine qui suit le début du live.
+    clips = call("https://api.twitch.tv/helix/clips", {
+        "broadcaster_id": videos[0]["user_id"], "first": 100,
+        "started_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"), "ended_at": (created + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }, auth)["data"]
+    return [
+        (c["vod_offset"], c["vod_offset"] + c["duration"], math.log1p(c["view_count"]))
+        for c in clips if c.get("video_id") == vod.group(1) and c.get("vod_offset") is not None
+    ]
+
+
+def transcribe_source(file: Path, duration: float, folder: Path, on_progress) -> list[tuple[float, str]]:
+    """Transcrit toute la source par morceaux de 10 minutes : [(instant, phrase)]. Mémoire constante, même sur 8 h."""
+    lines, step, wav = [], 600, folder / "analyse.wav"
+    for start in range(0, math.ceil(duration), step):
+        extracted = subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(start), "-t", str(step), "-i", str(file), "-vn", "-ac", "1", "-ar", "16000", "-loglevel", "error", str(wav)],
+            capture_output=True,
+        )
+        if extracted.returncode != 0:  # pas de piste audio
+            break
+        length = min(step, duration - start)
+        words, _ = transcribe(wav, lambda f: on_progress((start + f * length) / duration))
+        lines += [(round(start + t, 1), text) for t, text in speech_segments(words)]
+    wav.unlink(missing_ok=True)
+    return lines
+
+
+MOMENTS_PROMPT = """Tu repères les meilleurs moments d'un live ou d'une vidéo pour en faire des clips courts (TikTok, Reels, Shorts).
+
+Tu reçois une tranche du transcript. Chaque ligne commence par l'instant où elle est dite, en secondes depuis le début de la vidéo, entre crochets.
+
+Propose au plus 5 moments qui tiendraient seuls devant quelqu'un qui n'a pas vu le reste : blague, clash, annonce, moment émotionnel, réaction forte, anecdote qui a une chute. Si rien ne s'y prête, renvoie une liste vide : mieux vaut aucun moment qu'un moment faible.
+
+Pour chaque moment :
+- start et end : en secondes, sur la même échelle que le transcript. Commence juste avant la mise en place et termine juste après la chute. Vise 20 à 90 secondes.
+- title : un titre court et accrocheur, dans la langue du transcript.
+- reason : une phrase qui dit pourquoi ce moment marche.
+- category : blague, clash, annonce, emotion ou autre.
+- score : de 0 à 100, ton estimation de son potentiel en clip. Indicatif, sois sévère."""
+
+MOMENTS_SCHEMA = {
+    "type": "object",
+    "properties": {"moments": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "start": {"type": "integer"}, "end": {"type": "integer"}, "title": {"type": "string"}, "reason": {"type": "string"},
+            "category": {"type": "string", "enum": ["blague", "clash", "annonce", "emotion", "autre"]}, "score": {"type": "integer"},
+        },
+        "required": ["start", "end", "title", "reason", "category", "score"], "additionalProperties": False,
+    }}},
+    "required": ["moments"], "additionalProperties": False,
+}
+
+
+def claude_moments(conn, user: dict, transcript: list[tuple[float, str]], duration: float, on_progress, notes: list[str]) -> list[dict]:
+    """Fait lire le transcript à Claude, tranche par tranche, avec la clé de l'utilisateur. Chaque appel est noté dans Usage."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=decrypt(user["keyEncrypted"], os.environ["MASTER_KEY"]))
+    parts = slices(transcript)
+    moments = []
+    for i, part in enumerate(parts):
+        spent = conn.execute(
+            f'SELECT COALESCE(SUM("costUsd"), 0) AS total FROM "Usage" WHERE "userId" = %s AND "createdAt" >= date_trunc(\'month\', {NOW})', [user["id"]],
+        ).fetchone()["total"]
+        if spent >= user["monthlyBudgetUsd"]:
+            notes.append("Budget Claude mensuel atteint : l'analyse par Claude s'est arrêtée avant la fin. Augmente-le dans Compte pour continuer.")
+            break
+        try:
+            response = client.beta.messages.create(
+                model=CLAUDE_MODEL, max_tokens=16000,
+                betas=["server-side-fallback-2026-07-01"], fallbacks="default",  # si le modèle décline, l'API bascule seule sur un autre
+                system=MOMENTS_PROMPT,
+                messages=[{"role": "user", "content": format_slice(part)}],
+                output_config={"effort": "medium", "format": {"type": "json_schema", "schema": MOMENTS_SCHEMA}},
+            )
+        except anthropic.AuthenticationError:
+            raise Fatal("Clé Claude refusée par Anthropic. Remplace-la dans Compte, puis relance l'analyse.")
+        except anthropic.PermissionDeniedError as e:
+            raise Fatal(f"Anthropic refuse cette requête avec ta clé : {e.message}")
+        except anthropic.BadRequestError as e:
+            raise Fatal(f"Requête refusée par Anthropic : {e.message}")
+        except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.APIStatusError) as e:
+            raise RuntimeError(f"Anthropic est injoignable ou limite le débit ({type(e).__name__}). Nouvelle tentative plus tard.")
+
+        usage = response.usage
+        tokens_in = usage.input_tokens + (usage.cache_creation_input_tokens or 0) + (usage.cache_read_input_tokens or 0)
+        conn.execute(
+            'INSERT INTO "Usage" (id, "userId", model, "inputTokens", "outputTokens", "costUsd") VALUES (%s, %s, %s, %s, %s, %s)',
+            [uuid.uuid4().hex, user["id"], response.model, tokens_in, usage.output_tokens, cost_usd(response.model, tokens_in, usage.output_tokens)],
+        )
+        if response.stop_reason in ("refusal", "max_tokens"):
+            notes.append(f"Claude n'a pas pu analyser la tranche qui commence à {int(part[0][0] // 60)} min.")
+        else:
+            text = next((b.text for b in response.content if b.type == "text"), "{}")
+            try:
+                found = json.loads(text).get("moments", [])
+            except (json.JSONDecodeError, AttributeError):
+                found = []
+            moments += clean_moments(found, part[0][0], min(duration, part[-1][0] + 60))
+        on_progress((i + 1) / len(parts))
+    return moments
+
+
+def analyze(conn, job):
+    """Détecte les meilleurs moments d'une source : signaux, score par tranche de 10 s, clips candidats."""
+    src = conn.execute('SELECT * FROM "Source" WHERE id = %s AND status = %s', [job["payload"]["sourceId"], "ready"]).fetchone()
+    if src is None:  # supprimée entre-temps
+        return
+    progress = make_progress(conn, job)
+    file, duration = DATA / src["filePath"], src["duration"] or 0
+    use_claude = bool(job["payload"].get("claude"))
+    buckets = math.ceil(duration / BUCKET)
+    notes: list[str] = []
+    signals: dict[str, list[float]] = {}
+
+    per_second = audio_per_second(file, duration, lambda f: progress(f * (10 if use_claude else 90)))
+    if per_second:
+        signals["audio"] = normalize(bucket_mean(per_second))
+    else:
+        notes.append("Pas de piste audio : aucun signal sonore.")
+
+    if src["kind"] == "youtube" and src["url"]:
+        try:
+            heat = youtube_heatmap(src["url"])
+        except Exception:  # signal facultatif : une panne de YouTube ne doit pas faire échouer l'analyse
+            heat = []
+        if heat:
+            signals["heatmap"] = normalize(spread(heat, buckets))
+        else:
+            notes.append("YouTube ne fournit pas de courbe « Most replayed » pour cette vidéo (trop récente ou pas assez vue).")
+    if src["kind"] in ("twitch", "kick"):
+        notes.append("Twitch et Kick n'exposent pas de vraie courbe des moments les plus regardés : le score est une approximation.")
+    if src["kind"] == "twitch" and src["url"]:
+        try:
+            clips = twitch_clips(src["url"])
+        except Exception:
+            clips = None
+            notes.append("L'API Twitch n'a pas répondu : les clips des viewers ne sont pas pris en compte.")
+        else:
+            if clips is None:
+                notes.append("Clips des viewers non pris en compte : TWITCH_CLIENT_ID et TWITCH_CLIENT_SECRET ne sont pas configurés sur le serveur.")
+            elif clips:
+                signals["clips"] = normalize(spread(clips, buckets))
+
+    moments = []
+    if use_claude:
+        row = conn.execute('SELECT transcript FROM "Analysis" WHERE "sourceId" = %s', [src["id"]]).fetchone()
+        transcript = row["transcript"] if row and row["transcript"] else None
+        if transcript is None:
+            folder = DATA / src["userId"] / "sources" / src["id"]
+            transcript = transcribe_source(file, duration, folder, lambda f: progress(10 + f * 70))
+            # Enregistré tout de suite : une nouvelle tentative ou une nouvelle analyse ne retranscrit pas.
+            conn.execute(
+                f'INSERT INTO "Analysis" ("sourceId", "userId", transcript, signals, scores, notes, "updatedAt") VALUES (%s, %s, %s, %s, %s, %s, {NOW}) '
+                'ON CONFLICT ("sourceId") DO UPDATE SET transcript = EXCLUDED.transcript',
+                [src["id"], src["userId"], Jsonb(transcript), Jsonb({}), Jsonb([]), Jsonb([])],
+            )
+        progress(80)
+        if transcript:
+            user = conn.execute('SELECT * FROM "User" WHERE id = %s', [src["userId"]]).fetchone()
+            moments = claude_moments(conn, user, [tuple(line) for line in transcript], duration, lambda f: progress(80 + f * 18), notes)
+            if moments:
+                signals["claude"] = spread([(m["start"], m["end"], m["score"] / 100) for m in moments], buckets)
+        else:
+            notes.append("Aucune parole détectée : Claude n'a rien à lire.")
+
+    scores = combine(signals)
+    candidates = build_candidates(scores, signals, moments, duration)
+    updated = conn.execute(
+        f'INSERT INTO "Analysis" ("sourceId", "userId", signals, scores, notes, "updatedAt") VALUES (%s, %s, %s, %s, %s, {NOW}) '
+        f'ON CONFLICT ("sourceId") DO UPDATE SET signals = EXCLUDED.signals, scores = EXCLUDED.scores, notes = EXCLUDED.notes, "updatedAt" = {NOW}',
+        [src["id"], src["userId"], Jsonb({name: [round(v, 3) for v in values] for name, values in signals.items()}), Jsonb(scores), Jsonb(notes)],
+    )
+    conn.execute('DELETE FROM "Candidate" WHERE "sourceId" = %s', [src["id"]])
+    for c in candidates:
+        conn.execute(
+            'INSERT INTO "Candidate" (id, "userId", "sourceId", start, "end", score, title, reason, origin) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            [uuid.uuid4().hex, src["userId"], src["id"], c["start"], c["end"], c["score"], c["title"], c["reason"], c["origin"]],
+        )
+
+
+HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze}
 
 
 def run(conn, job):
@@ -379,7 +620,7 @@ def run(conn, job):
             )
             return
         conn.execute(f'UPDATE "Job" SET status = %s, error = %s, "updatedAt" = {NOW} WHERE id = %s', ["failed", message, job["id"]])
-        if job["sourceId"]:
+        if job["sourceId"] and job["type"] == "ingest":
             conn.execute('UPDATE "Source" SET status = %s, error = %s WHERE id = %s', ["error", message, job["sourceId"]])
             # Pas de fichiers orphelins qui occupent le disque sans compter dans le quota.
             src = conn.execute('SELECT "userId" FROM "Source" WHERE id = %s', [job["sourceId"]]).fetchone()
