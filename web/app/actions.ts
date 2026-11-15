@@ -1,15 +1,17 @@
 "use server";
 
 import { rm } from "node:fs/promises";
+import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSession, destroySession, requireUser } from "@/lib/auth";
 import { checkKey, generateClipMeta } from "@/lib/claude";
 import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
-import { decrypt, encrypt, hashKey } from "@/lib/crypto";
+import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
 import { type Edit, sanitizeEdit, sanitizeWords, type Word } from "@/lib/edit";
+import { hashPassword, MAX_PASSWORD, MIN_PASSWORD, verifyPassword } from "@/lib/password";
 import { type ClipMeta, DAILY_LIMITS, isProvider, PROVIDERS } from "@/lib/publish";
 import { MAX_CLIP_SECONDS } from "@/lib/upload";
 
@@ -37,18 +39,30 @@ async function validateKey(key: string): Promise<string | null> {
   return null;
 }
 
+const NO_KEY = "Ajoute d'abord ta clé API Claude dans Compte.";
+
+export async function signup(_: FormState, form: FormData): Promise<FormState> {
+  if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
+  const email = String(form.get("email") ?? "").trim().toLowerCase();
+  const password = String(form.get("password") ?? "");
+  if (email.length > 200 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "Adresse email invalide." };
+  if (password.length < MIN_PASSWORD) return { error: `Le mot de passe doit faire au moins ${MIN_PASSWORD} caractères.` };
+  if (password.length > MAX_PASSWORD) return { error: "Mot de passe trop long." };
+  if (password !== String(form.get("confirm") ?? "")) return { error: "Les deux mots de passe ne sont pas identiques." };
+  if (await db.user.findUnique({ where: { email } })) return { error: "Un compte existe déjà avec cet email. Connecte-toi." };
+
+  const user = await db.user.create({ data: { email, passwordHash: await hashPassword(password) } });
+  await createSession(user.id);
+  redirect("/app/compte?bienvenue=1");
+}
+
 export async function login(_: FormState, form: FormData): Promise<FormState> {
   if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
-  const key = String(form.get("key") ?? "").trim();
-  const error = await validateKey(key);
-  if (error) return { error };
-
-  const keyHash = hashKey(key);
-  const user = await db.user.upsert({
-    where: { keyHash },
-    update: {},
-    create: { keyHash, keyEncrypted: encrypt(key) },
-  });
+  const email = String(form.get("email") ?? "").trim().toLowerCase();
+  const password = String(form.get("password") ?? "").slice(0, MAX_PASSWORD);
+  const user = await db.user.findUnique({ where: { email } });
+  // Même message et même temps de calcul que le compte existe ou non.
+  if (!(await verifyPassword(password, user?.passwordHash)) || !user) return { error: "Email ou mot de passe incorrect." };
   await createSession(user.id);
   redirect("/app");
 }
@@ -58,33 +72,43 @@ export async function logout() {
   redirect("/");
 }
 
-export async function changeKey(_: FormState, form: FormData): Promise<FormState> {
+/** Enregistre ou remplace la clé API Claude du compte, après vérification auprès d'Anthropic. */
+export async function saveKey(_: FormState, form: FormData): Promise<FormState> {
   const user = await requireUser();
   if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
-  const oldKey = String(form.get("oldKey") ?? "").trim();
-  const newKey = String(form.get("newKey") ?? "").trim();
-  if (hashKey(oldKey) !== user.keyHash) return { error: "L'ancienne clé ne correspond pas à ce compte." };
-  const error = await validateKey(newKey);
+  const key = String(form.get("key") ?? "").trim();
+  const error = await validateKey(key);
   if (error) return { error };
+  await db.user.update({ where: { id: user.id }, data: { keyEncrypted: encrypt(key) } });
+  revalidatePath("/app", "layout");
+  return { ok: "Clé enregistrée." };
+}
 
-  const keyHash = hashKey(newKey);
-  if (await db.user.findFirst({ where: { keyHash, NOT: { id: user.id } } }))
-    return { error: "Cette clé est déjà liée à un autre compte." };
-  // Les données sont liées à user.id : changer de clé ne touche que ces deux colonnes.
-  await db.user.update({ where: { id: user.id }, data: { keyHash, keyEncrypted: encrypt(newKey) } });
-  return { ok: "Clé remplacée." };
+export async function removeKey() {
+  const user = await requireUser();
+  await db.user.update({ where: { id: user.id }, data: { keyEncrypted: null } });
+  revalidatePath("/app", "layout");
+}
+
+export async function changePassword(_: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
+  const next = String(form.get("next") ?? "");
+  if (!(await verifyPassword(String(form.get("current") ?? "").slice(0, MAX_PASSWORD), user.passwordHash))) return { error: "Mot de passe actuel incorrect." };
+  if (next.length < MIN_PASSWORD) return { error: `Le nouveau mot de passe doit faire au moins ${MIN_PASSWORD} caractères.` };
+  if (next.length > MAX_PASSWORD) return { error: "Mot de passe trop long." };
+  await db.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(next) } });
+  // Les autres appareils sont déconnectés : un mot de passe changé parce qu'il a fuité ne doit plus rien ouvrir.
+  await db.session.deleteMany({ where: { userId: user.id } });
+  await createSession(user.id);
+  return { ok: "Mot de passe changé. Tes autres appareils sont déconnectés." };
 }
 
 export async function saveAccount(_: FormState, form: FormData): Promise<FormState> {
   const user = await requireUser();
-  const email = String(form.get("email") ?? "").trim();
   const budget = Number(form.get("budget"));
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "Adresse email invalide." };
   if (!Number.isFinite(budget) || budget < 0 || budget > 10_000) return { error: "Budget invalide." };
-  await db.user.update({
-    where: { id: user.id },
-    data: { recoveryEmail: email || null, monthlyBudgetUsd: budget },
-  });
+  await db.user.update({ where: { id: user.id }, data: { monthlyBudgetUsd: budget } });
   return { ok: "Enregistré." };
 }
 
@@ -233,6 +257,7 @@ export async function analyzeSource(sourceId: string, claude: boolean): Promise<
   if (await db.job.findFirst({ where: { userId: user.id, sourceId: source.id, type: "analyze", status: { in: ["queued", "running"] } } }))
     return { error: "Une analyse est déjà en cours pour cette vidéo." };
   if (claude) {
+    if (!user.keyEncrypted) return { error: NO_KEY };
     const estimate = estimateAnalysisUsd(source.duration ?? 0);
     const left = user.monthlyBudgetUsd - (await monthSpentUsd(user.id));
     if (estimate > left)
@@ -254,6 +279,7 @@ export async function generateMeta(clipId: string, language: string): Promise<Fo
   const user = await requireUser();
   const clip = await db.clip.findFirst({ where: { id: String(clipId), userId: user.id, status: "rendered" } });
   if (!clip) return { error: "Clip introuvable ou pas encore rendu." };
+  if (!user.keyEncrypted) return { error: NO_KEY };
   if ((await monthSpentUsd(user.id)) >= user.monthlyBudgetUsd) return { error: "Budget Claude du mois atteint. Augmente-le dans Compte." };
 
   const words = sanitizeWords(clip.words, clip.end - clip.start) ?? [];

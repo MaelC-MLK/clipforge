@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
 function env(name: string): string {
   const value = process.env[name];
@@ -10,11 +10,6 @@ function masterKey(): Buffer {
   const key = Buffer.from(env("MASTER_KEY"), "hex");
   if (key.length !== 32) throw new Error("MASTER_KEY doit faire 64 caractères hexadécimaux");
   return key;
-}
-
-/** Identifiant stable d'un utilisateur : HMAC-SHA256 de sa clé avec le sel serveur. */
-export function hashKey(apiKey: string): string {
-  return createHmac("sha256", env("SERVER_SALT")).update(apiKey).digest("hex");
 }
 
 /** AES-256-GCM. Format : base64(iv 12 octets | chiffré | tag 16 octets), lisible par worker/crypto.py. */

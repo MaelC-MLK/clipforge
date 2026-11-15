@@ -35,6 +35,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </form>
         </nav>
       </header>
+      {!user.keyEncrypted && (
+        <p className="border-b border-violet-900/60 bg-violet-950/40 px-4 py-2 text-center text-sm text-violet-200">
+          Il te manque une clé API Claude pour l&apos;analyse des meilleurs moments et les textes de publication.{" "}
+          <Link href="/app/compte#cle" className="font-medium underline">
+            L&apos;ajouter
+          </Link>
+        </p>
+      )}
       <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
     </>
   );

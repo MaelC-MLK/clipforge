@@ -16,9 +16,9 @@ model User {
   candidates       Candidate[]
   templates        Template[]
   id               String        @id @default(cuid())
-  keyHash          String        @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
-  keyEncrypted     String // AES-256-GCM, base64(iv | chiffré | tag)
-  recoveryEmail    String?
+  email            String        @unique // en minuscules
+  passwordHash     String // scrypt, voir lib/password.ts
+  keyEncrypted     String? // clé API Claude, AES-256-GCM, base64(iv | chiffré | tag). Absente tant que l'utilisateur ne l'a pas ajoutée
   monthlyBudgetUsd Float         @default(20)
   storageQuotaGb   Float         @default(20)
   createdAt        DateTime      @default(now())

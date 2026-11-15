@@ -479,6 +479,8 @@ def claude_moments(conn, user: dict, transcript: list[tuple[float, str]], durati
     """Fait lire le transcript à Claude, tranche par tranche, avec la clé de l'utilisateur. Chaque appel est noté dans Usage."""
     import anthropic
 
+    if not user["keyEncrypted"]:
+        raise Fatal("Aucune clé API Claude sur ce compte. Ajoute-la dans Compte, puis relance l'analyse.")
     client = anthropic.Anthropic(api_key=decrypt(user["keyEncrypted"], os.environ["MASTER_KEY"]))
     parts = slices(transcript)
     moments = []

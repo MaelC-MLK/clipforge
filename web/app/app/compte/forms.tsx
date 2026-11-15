@@ -1,7 +1,9 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState } from "react";
-import { changeKey, saveAccount, type FormState } from "../../actions";
+import { MIN_PASSWORD } from "@/lib/upload";
+import { changePassword, removeKey, saveAccount, saveKey, type FormState } from "../../actions";
 
 function Message({ state }: { state: FormState }) {
   if (state.error) return <p role="alert" className="text-sm text-red-400">{state.error}</p>;
@@ -9,7 +11,41 @@ function Message({ state }: { state: FormState }) {
   return null;
 }
 
-export function AccountForm({ email, budget }: { email: string; budget: number }) {
+export function KeyForm({ hasKey }: { hasKey: boolean }) {
+  const router = useRouter();
+  const [state, action, pending] = useActionState(saveKey, {});
+  return (
+    <form action={action} className="mt-4 max-w-md space-y-3">
+      <div>
+        <label className="label" htmlFor="key">
+          {hasKey ? "Remplacer par une nouvelle clé" : "Ta clé API Claude"}
+        </label>
+        <input id="key" name="key" type="password" required autoComplete="off" placeholder="sk-ant-…" className="input" />
+      </div>
+      <Message state={state} />
+      <div className="flex flex-wrap gap-2">
+        <button className="btn" disabled={pending}>
+          {pending ? "Vérification auprès d'Anthropic…" : hasKey ? "Remplacer la clé" : "Enregistrer la clé"}
+        </button>
+        {hasKey && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={async () => {
+              if (!confirm("Retirer la clé de ClipForge ? L'analyse par Claude et les textes de publication seront désactivés.")) return;
+              await removeKey();
+              router.refresh();
+            }}
+          >
+            Retirer la clé
+          </button>
+        )}
+      </div>
+    </form>
+  );
+}
+
+export function AccountForm({ budget }: { budget: number }) {
   const [state, action, pending] = useActionState(saveAccount, {});
   return (
     <form action={action} className="mt-4 max-w-md space-y-3">
@@ -18,16 +54,7 @@ export function AccountForm({ email, budget }: { email: string; budget: number }
           Budget Claude mensuel ($)
         </label>
         <input id="budget" name="budget" type="number" min="0" step="1" required defaultValue={budget} className="input" />
-      </div>
-      <div>
-        <label className="label" htmlFor="email">
-          Email de récupération (optionnel)
-        </label>
-        <input id="email" name="email" type="email" defaultValue={email} placeholder="toi@exemple.fr" className="input" />
-        <p className="mt-1 text-xs text-zinc-500">
-          Enregistré pour retrouver ton compte si ta clé est révoquée. L&apos;envoi du lien de récupération n&apos;est
-          pas encore actif.
-        </p>
+        <p className="mt-1 text-xs text-zinc-500">Au-delà, ClipForge refuse de lancer de nouveaux appels à Claude jusqu&apos;au mois suivant.</p>
       </div>
       <Message state={state} />
       <button className="btn" disabled={pending}>
@@ -37,25 +64,25 @@ export function AccountForm({ email, budget }: { email: string; budget: number }
   );
 }
 
-export function KeyForm() {
-  const [state, action, pending] = useActionState(changeKey, {});
+export function PasswordForm() {
+  const [state, action, pending] = useActionState(changePassword, {});
   return (
     <form action={action} className="mt-4 max-w-md space-y-3">
       <div>
-        <label className="label" htmlFor="oldKey">
-          Clé actuelle
+        <label className="label" htmlFor="current">
+          Mot de passe actuel
         </label>
-        <input id="oldKey" name="oldKey" type="password" required autoComplete="off" className="input" />
+        <input id="current" name="current" type="password" required autoComplete="current-password" className="input" />
       </div>
       <div>
-        <label className="label" htmlFor="newKey">
-          Nouvelle clé
+        <label className="label" htmlFor="next">
+          Nouveau mot de passe ({MIN_PASSWORD} caractères au moins)
         </label>
-        <input id="newKey" name="newKey" type="password" required autoComplete="off" className="input" />
+        <input id="next" name="next" type="password" required minLength={MIN_PASSWORD} autoComplete="new-password" className="input" />
       </div>
       <Message state={state} />
       <button className="btn" disabled={pending}>
-        {pending ? "Vérification…" : "Changer de clé"}
+        Changer le mot de passe
       </button>
     </form>
   );

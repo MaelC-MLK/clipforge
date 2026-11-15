@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test lib/crypto.test.ts lib/edit.test.ts lib/publish.test.ts"
+    "test": "node --test lib/crypto.test.ts lib/edit.test.ts lib/publish.test.ts lib/password.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",

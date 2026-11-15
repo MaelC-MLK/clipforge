@@ -2,9 +2,11 @@
 
 Studio de clipping : importer une VOD ou une vidéo, repérer les meilleurs moments, monter des clips verticaux et les publier.
 
+![Page d'accueil de ClipForge](docs/accueil.png)
+
 État actuel : **phase 5**.
 
-- Phase 1 (socle) : connexion par clé Claude, import par URL ou par fichier, file de jobs, bibliothèque avec progression en temps réel, page Utilisation.
+- Phase 1 (socle) : comptes par email et mot de passe, clé API Claude ajoutée dans le compte, import par URL ou par fichier, file de jobs, bibliothèque avec progression en temps réel, page Utilisation.
 - Phase 2 (clip de base) : découpe d'un extrait, recadrage vertical 9:16, sous-titres karaoké mot par mot, voix de synthèse en option, musique de fond, rendu 1080x1920 H.264/AAC, export SRT.
 - Phase 3 (éditeur complet) : cadrage manuel par images clés, split facecam/jeu, vidéo secondaire empilée, styles de sous-titres et correction du texte, accroche, filigrane, barre de progression, zoom sur les pics sonores, coupe des silences, normalisation du volume, miniature, templates, aperçu vertical en direct.
 - Phase 4 (détection) : score des meilleurs moments par tranche de 10 secondes (volume sonore, « Most replayed » de YouTube, clips des viewers Twitch, lecture du transcript par Claude), heatmap cliquable, clips candidats à charger dans l'éditeur ou à rejeter, coût Claude estimé avant et compté après.
@@ -127,9 +129,9 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 docker compose up --build
 ```
 
-4. Ouvrir http://localhost:3000 et se connecter avec une clé API Claude (`sk-ant-…`).
+4. Ouvrir http://localhost:3000, créer un compte (email et mot de passe), puis ajouter sa clé API Claude dans Compte. La page d'accueil et la page Compte expliquent comment en obtenir une sur [platform.claude.com](https://platform.claude.com/settings/keys).
 
-Ne change jamais `MASTER_KEY` ni `SERVER_SALT` après la première connexion : les comptes existants deviendraient inaccessibles.
+Ne change jamais `MASTER_KEY` après la première utilisation : les clés Claude et les jetons des réseaux, chiffrés avec elle, deviendraient illisibles. `SERVER_SALT` signe les liens de vidéo donnés à Instagram.
 
 ## Développer le web hors Docker
 
@@ -157,14 +159,16 @@ Le même vecteur de chiffrement est vérifié des deux côtés : ce que le web c
 
 ## Sécurité
 
-- La clé Claude n'est jamais renvoyée au navigateur. En base : un hash (HMAC-SHA256 avec `SERVER_SALT`) pour identifier le compte, et la clé chiffrée (AES-256-GCM avec `MASTER_KEY`) pour le worker.
+- Comptes : email et mot de passe. Le mot de passe est haché avec scrypt et un sel par compte, jamais stocké en clair. Changer de mot de passe déconnecte les autres appareils.
+- La clé Claude est facultative et ajoutée après l'inscription. Elle est vérifiée auprès d'Anthropic, chiffrée en base (AES-256-GCM avec `MASTER_KEY`) et jamais renvoyée au navigateur. Sans clé, l'analyse par Claude et les textes de publication sont désactivés ; le reste fonctionne.
 - Session : jeton aléatoire dans un cookie httpOnly, seul son hash est en base.
 - Chaque requête filtre par utilisateur ; les fichiers ne sont servis qu'à leur propriétaire.
-- Connexion limitée à 5 tentatives par minute et par adresse IP.
+- Inscription, connexion, changement de mot de passe et de clé : 5 tentatives par minute et par adresse IP au total.
 
 ## Limites connues
 
-- L'email de récupération est enregistré, mais l'envoi du lien de récupération n'existe pas encore.
+- Pas d'envoi d'email : ni vérification de l'adresse à l'inscription, ni réinitialisation du mot de passe oublié.
+- La migration `accounts` supprime les anciens comptes identifiés par leur seule clé Claude (ils n'avaient pas d'email pour se reconnecter).
 - Le coût Claude affiché est une estimation calculée à partir des tokens consommés, pas la facture d'Anthropic.
 - Publication : code écrit d'après les documentations officielles et testé contre de faux serveurs qui imitent Google, TikTok et Instagram, jamais contre les vraies plateformes (il faut des applications développeur).
 - Publication : pas de notification par email en cas d'échec (pastille dans le menu seulement), pas de statistiques des posts, X non branché.
