@@ -10,16 +10,18 @@ datasource db {
 // Les statuts sont des String (pas des enums) : le worker Python écrit dans ces tables en SQL brut.
 
 model User {
+  accounts         Account[]
+  publications     Publication[]
   analyses         Analysis[]
   candidates       Candidate[]
   templates        Template[]
-  id               String      @id @default(cuid())
-  keyHash          String      @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
+  id               String        @id @default(cuid())
+  keyHash          String        @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
   keyEncrypted     String // AES-256-GCM, base64(iv | chiffré | tag)
   recoveryEmail    String?
-  monthlyBudgetUsd Float       @default(20)
-  storageQuotaGb   Float       @default(20)
-  createdAt        DateTime    @default(now())
+  monthlyBudgetUsd Float         @default(20)
+  storageQuotaGb   Float         @default(20)
+  createdAt        DateTime      @default(now())
   sessions         Session[]
   sources          Source[]
   clips            Clip[]
@@ -58,24 +60,26 @@ model Source {
 }
 
 model Clip {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sourceId   String
-  source     Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  title      String
-  start      Float // secondes dans la source
-  end        Float
-  edit       Json // réglages du montage : type Edit de lib/edit.ts
-  words      Json? // [{ w, start, end }] relatifs au début du clip, écrits par le worker ou corrigés par l'utilisateur
-  language   String? // langue détectée, pour la voix de synthèse
-  status     String   @default("rendering") // rendering | rendered | error
-  error      String?
-  outputPath String? // relatif à DATA_DIR
-  srtPath    String?
-  sizeBytes  BigInt   @default(0)
-  createdAt  DateTime @default(now())
-  jobs       Job[]
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId     String
+  source       Source        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title        String
+  start        Float // secondes dans la source
+  end          Float
+  edit         Json // réglages du montage : type Edit de lib/edit.ts
+  words        Json? // [{ w, start, end }] relatifs au début du clip, écrits par le worker ou corrigés par l'utilisateur
+  language     String? // langue détectée, pour la voix de synthèse
+  meta         Json? // titres, descriptions, hashtags et score proposés par Claude (type ClipMeta de lib/publish.ts)
+  publications Publication[]
+  status       String        @default("rendering") // rendering | rendered | error
+  error        String?
+  outputPath   String? // relatif à DATA_DIR
+  srtPath      String?
+  sizeBytes    BigInt        @default(0)
+  createdAt    DateTime      @default(now())
+  jobs         Job[]
 
   @@index([sourceId])
 }
@@ -88,7 +92,7 @@ model Job {
   source    Source?  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   clipId    String?
   clip      Clip?    @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  type      String // ingest | render | analyze
+  type      String // ingest | render | analyze | publish
   payload   Json
   status    String   @default("queued") // queued | running | done | failed
   progress  Int      @default(0) // 0-100
@@ -156,4 +160,43 @@ model Candidate {
   createdAt DateTime @default(now())
 
   @@index([sourceId])
+}
+
+// Compte d'un réseau social connecté par OAuth. Les jetons sont chiffrés comme la clé Claude.
+model Account {
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     String // youtube | tiktok | instagram
+  externalId   String // identifiant du compte chez le réseau
+  name         String
+  accessToken  String // chiffré (AES-256-GCM)
+  refreshToken String? // chiffré
+  expiresAt    DateTime? // fin de validité de accessToken
+  createdAt    DateTime      @default(now())
+  publications Publication[]
+
+  @@unique([userId, provider, externalId])
+}
+
+// Un clip à publier sur un compte, à une date donnée. Le worker l'exécute par un job `publish`.
+model Publication {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipId      String
+  clip        Clip     @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  scheduledAt DateTime
+  status      String   @default("scheduled") // scheduled | publishing | published | draft_sent | failed
+  title       String // titre YouTube ; vide pour les autres réseaux
+  description String // légende (TikTok, Instagram) ou description (YouTube), hashtags compris
+  tiktokSound String   @default("") // nom du son à ajouter à la main : la vidéo part alors en brouillon TikTok
+  postUrl     String?
+  error       String?
+  note        String? // information non bloquante (publié en privé, lien pas encore disponible…)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, scheduledAt])
 }

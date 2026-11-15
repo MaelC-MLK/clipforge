@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import wave
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -21,7 +21,8 @@ import yt_dlp
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from crypto import decrypt
+import publish as networks
+from crypto import decrypt, encrypt
 from detect import (BUCKET, bucket_mean, build_candidates, clean_moments, combine, cost_usd, format_slice,
                     normalize, slices, spread)
 from render import (build_ass, build_srt, keep_intervals, loud_peaks, remap_words, render_cmd, smooth,
@@ -602,7 +603,45 @@ def analyze(conn, job):
         )
 
 
-HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze}
+def publish(conn, job):
+    """Publie un clip sur un compte de réseau social, à l'heure prévue (le job attend dans la file jusque-là)."""
+    pub = conn.execute(
+        'SELECT p.*, c."outputPath", a.provider, a."externalId", a."accessToken", a."refreshToken", a."expiresAt" '
+        'FROM "Publication" p JOIN "Clip" c ON c.id = p."clipId" JOIN "Account" a ON a.id = p."accountId" WHERE p.id = %s',
+        [job["payload"]["publicationId"]],
+    ).fetchone()
+    if pub is None or pub["status"] not in ("scheduled", "publishing"):  # annulée ou déjà traitée
+        return
+    if not pub["outputPath"]:
+        raise Fatal("Le clip n'est pas rendu. Refais son rendu, puis replanifie.")
+    conn.execute('UPDATE "Publication" SET status = %s, error = NULL WHERE id = %s', ["publishing", pub["id"]])
+
+    token = decrypt(pub["accessToken"])
+    # Jeton bientôt périmé : renouvelé et enregistré avant de publier. Instagram (60 jours) : dès qu'il reste moins d'une semaine.
+    margin = timedelta(days=7) if pub["provider"] == "instagram" else timedelta(minutes=5)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # la base stocke des dates UTC sans fuseau
+    if pub["expiresAt"] and pub["expiresAt"] - margin < now:
+        if pub["provider"] == "instagram" and pub["expiresAt"] < now:
+            raise Fatal("L'autorisation Instagram a expiré. Reconnecte ce compte dans Réseaux.")
+        token, renewal, seconds = networks.refresh(pub["provider"], token, decrypt(pub["refreshToken"]) if pub["refreshToken"] else None)
+        conn.execute(
+            'UPDATE "Account" SET "accessToken" = %s, "refreshToken" = %s, "expiresAt" = %s WHERE id = %s',
+            [encrypt(token), encrypt(renewal) if renewal else None, now + timedelta(seconds=seconds), pub["accountId"]],
+        )
+
+    file = DATA / pub["outputPath"]
+    if pub["provider"] == "youtube":
+        result = networks.youtube(token, file, pub["title"], pub["description"])
+    elif pub["provider"] == "tiktok":
+        result = networks.tiktok(token, file, pub["description"], draft=bool(pub["tiktokSound"].strip()))
+    else:
+        url = f'{os.environ.get("APP_URL", "http://localhost:3000").rstrip("/")}/api/public/{pub["id"]}/{networks.public_token(pub["id"])}'
+        result = networks.instagram(token, pub["externalId"], url, pub["description"])
+    status, link, note = result
+    conn.execute('UPDATE "Publication" SET status = %s, "postUrl" = %s, note = %s, error = NULL WHERE id = %s', [status, link, note, pub["id"]])
+
+
+HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze, "publish": publish}
 
 
 def run(conn, job):
@@ -610,6 +649,8 @@ def run(conn, job):
         HANDLERS[job["type"]](conn, job)
         conn.execute(f'UPDATE "Job" SET status = %s, progress = 100, error = NULL, "updatedAt" = {NOW} WHERE id = %s', ["done", job["id"]])
     except Exception as e:
+        if isinstance(e, networks.Refused):
+            e = Fatal(str(e))
         traceback.print_exc()
         message = str(e)[:500] or type(e).__name__
         if not isinstance(e, Fatal) and job["attempts"] < MAX_ATTEMPTS:
@@ -626,7 +667,9 @@ def run(conn, job):
             src = conn.execute('SELECT "userId" FROM "Source" WHERE id = %s', [job["sourceId"]]).fetchone()
             if src:
                 shutil.rmtree(DATA / src["userId"] / "sources" / job["sourceId"], ignore_errors=True)
-        if job["clipId"]:
+        if job["type"] == "publish":
+            conn.execute('UPDATE "Publication" SET status = %s, error = %s WHERE id = %s', ["failed", message, job["payload"].get("publicationId")])
+        if job["clipId"] and job["type"] == "render":
             conn.execute('UPDATE "Clip" SET status = %s, error = %s WHERE id = %s', ["error", message, job["clipId"]])
 
 

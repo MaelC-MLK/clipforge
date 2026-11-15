@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { logout } from "../actions";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
-  await requireUser();
+  const user = await requireUser();
+  const failed = await db.publication.count({ where: { userId: user.id, status: "failed" } });
   return (
     <>
       <header className="border-b border-zinc-800">
@@ -13,6 +15,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </Link>
           <Link href="/app" className="text-zinc-300 hover:text-white">
             Bibliothèque
+          </Link>
+          <Link href="/app/calendrier" className="text-zinc-300 hover:text-white">
+            Calendrier
+            {failed > 0 && (
+              <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-xs text-white" title="Publications en échec">
+                {failed}
+              </span>
+            )}
+          </Link>
+          <Link href="/app/reseaux" className="text-zinc-300 hover:text-white">
+            Réseaux
           </Link>
           <Link href="/app/compte" className="text-zinc-300 hover:text-white">
             Utilisation et compte

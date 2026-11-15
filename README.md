@@ -2,12 +2,13 @@
 
 Studio de clipping : importer une VOD ou une vidéo, repérer les meilleurs moments, monter des clips verticaux et les publier.
 
-État actuel : **phase 4**.
+État actuel : **phase 5**.
 
 - Phase 1 (socle) : connexion par clé Claude, import par URL ou par fichier, file de jobs, bibliothèque avec progression en temps réel, page Utilisation.
 - Phase 2 (clip de base) : découpe d'un extrait, recadrage vertical 9:16, sous-titres karaoké mot par mot, voix de synthèse en option, musique de fond, rendu 1080x1920 H.264/AAC, export SRT.
 - Phase 3 (éditeur complet) : cadrage manuel par images clés, split facecam/jeu, vidéo secondaire empilée, styles de sous-titres et correction du texte, accroche, filigrane, barre de progression, zoom sur les pics sonores, coupe des silences, normalisation du volume, miniature, templates, aperçu vertical en direct.
 - Phase 4 (détection) : score des meilleurs moments par tranche de 10 secondes (volume sonore, « Most replayed » de YouTube, clips des viewers Twitch, lecture du transcript par Claude), heatmap cliquable, clips candidats à charger dans l'éditeur ou à rejeter, coût Claude estimé avant et compté après.
+- Phase 5 (publication) : connexion de comptes YouTube, TikTok et Instagram par OAuth, textes de publication et score proposés par Claude, planification par compte, publication automatique par le worker, calendrier et liste avec statut, lien du post, nouvelle tentative et téléchargement de secours.
 
 ## Architecture
 
@@ -61,6 +62,53 @@ Sur la page d'une source, « Analyser cette vidéo » lance un job `analyze`. Ch
 - Twitch et Kick n'exposent pas de vraie courbe des moments les plus regardés. Le score y est une approximation, et l'interface le dit.
 
 La logique pure (cases, normalisation, score, choix des pics, coût) est dans `worker/detect.py`, testée dans `worker/test_worker.py`.
+
+## Publication
+
+1. **Réseaux** : connecter un ou plusieurs comptes par réseau. Les jetons sont chiffrés en base comme la clé Claude, et renouvelés par le worker avant chaque publication.
+2. **Publier** (bouton sur un clip rendu) : textes par réseau, à écrire ou à faire proposer par Claude dans la langue choisie (avec un score de potentiel, indicatif), comptes, date et heure.
+3. Chaque publication est un job `publish` qui attend dans la file jusqu'à son heure. Trois tentatives si le réseau est indisponible ; un refus net (quota, autorisation, vidéo rejetée) n'est pas réessayé.
+4. **Calendrier** : vue par mois et vue liste. Statuts : en attente, en cours, publié (avec le lien), brouillon TikTok à finir, échec (avec la raison, « Réessayer » et « Télécharger le clip » pour publier à la main). Le menu affiche le nombre d'échecs.
+
+Ce que fait chaque réseau (documentations officielles de novembre 2026) :
+
+| Réseau | Envoi | À savoir |
+| --- | --- | --- |
+| YouTube | envoi en deux temps (`videos.insert`, protocole « resumable ») | une vidéo verticale de 3 minutes au plus devient un Short ; 100 envois par jour et par projet par défaut |
+| TikTok | Content Posting API, envoi du fichier par morceaux | tant que l'application n'est pas auditée par TikTok, les vidéos sortent en privé |
+| Instagram | conteneur `REELS`, Instagram télécharge la vidéo, puis `media_publish` | compte professionnel ; le site doit être public en https ; 100 publications par 24 heures |
+
+**Son TikTok.** L'API TikTok n'a aucun champ pour choisir un son de sa bibliothèque. Si le champ « Son TikTok » est rempli, la vidéo part en brouillon dans la boîte de réception TikTok du compte ; l'utilisateur l'ouvre dans l'appli, ajoute le son et publie. TikTok accepte 5 brouillons en attente par 24 heures.
+
+**X (Twitter)** n'est pas branché : le bouton « Télécharger le clip » sert de secours pour les réseaux sans connexion.
+
+### Applications développeur
+
+Chaque réseau demande une application créée par l'administrateur du site. Les identifiants vont dans `.env`, puis `docker compose up -d` pour les prendre en compte. `APP_URL` doit être l'adresse publique du site ; pour un essai depuis un poste local, un tunnel https (Cloudflare Tunnel, ngrok) fait l'affaire.
+
+**YouTube**
+
+1. [console.cloud.google.com](https://console.cloud.google.com) : créer un projet, activer « YouTube Data API v3 ».
+2. « Écran de consentement OAuth » : type externe, ajouter les champs d'application `youtube.upload` et `youtube.readonly`. Tant que l'application est en test, seuls les comptes ajoutés comme testeurs peuvent se connecter.
+3. « Identifiants » : créer un ID client OAuth de type « Application Web », avec l'URI de redirection `{APP_URL}/api/oauth/youtube/callback`.
+4. Reporter l'ID et le secret dans `GOOGLE_CLIENT_ID` et `GOOGLE_CLIENT_SECRET`.
+5. Avant une ouverture au public : faire valider l'écran de consentement par Google, et vérifier dans la documentation de l'audit de conformité si les vidéos d'un projet non audité sont limitées.
+
+**TikTok**
+
+1. [developers.tiktok.com](https://developers.tiktok.com) : créer une application, ajouter les produits « Login Kit » et « Content Posting API ».
+2. Demander les droits `user.info.basic`, `video.publish` et `video.upload`.
+3. Déclarer l'URI de redirection `{APP_URL}/api/oauth/tiktok/callback`. TikTok n'accepte que du https : pas de `http://localhost`.
+4. Reporter la clé et le secret dans `TIKTOK_CLIENT_KEY` et `TIKTOK_CLIENT_SECRET`.
+5. Demander l'audit de la Content Posting API. Avant l'audit, tout ce qui est publié reste en visibilité privée.
+
+**Instagram**
+
+1. [developers.facebook.com](https://developers.facebook.com) : créer une application, ajouter le produit « Instagram », choisir « Connexion Instagram pour les entreprises ».
+2. Droits : `instagram_business_basic` et `instagram_business_content_publish`.
+3. Déclarer l'URI de redirection `{APP_URL}/api/oauth/instagram/callback`.
+4. Reporter l'identifiant et le secret de l'application Instagram dans `INSTAGRAM_APP_ID` et `INSTAGRAM_APP_SECRET`.
+5. En accès standard, seuls les comptes que tu gères peuvent se connecter. Pour d'autres comptes, demander l'accès avancé (examen de l'application par Meta).
 
 ## Lancer
 
@@ -118,6 +166,9 @@ Le même vecteur de chiffrement est vérifié des deux côtés : ce que le web c
 
 - L'email de récupération est enregistré, mais l'envoi du lien de récupération n'existe pas encore.
 - Le coût Claude affiché est une estimation calculée à partir des tokens consommés, pas la facture d'Anthropic.
+- Publication : code écrit d'après les documentations officielles et testé contre de faux serveurs qui imitent Google, TikTok et Instagram, jamais contre les vraies plateformes (il faut des applications développeur).
+- Publication : pas de notification par email en cas d'échec (pastille dans le menu seulement), pas de statistiques des posts, X non branché.
+- TikTok : si l'envoi réussit mais que la vérification finale échoue, la publication est marquée comme envoyée sans lien, pour ne jamais publier deux fois.
 - Densité du chat Twitch / Kick : pas prise en compte. Aucune API officielle ne donne le chat d'une rediffusion.
 - Clips des viewers Twitch : code écrit d'après la documentation Helix, jamais exécuté contre la vraie API (il faut des identifiants d'application Twitch).
 - Signal sonore : volume seulement, pas de reconnaissance des rires ou des cris.

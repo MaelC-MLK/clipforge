@@ -687,6 +687,9 @@ export function Editor({
                     <a className="btn-ghost" href={`/api/clips/${c.id}/thumb?dl=1`}>
                       Miniature
                     </a>
+                    <a className="btn-ghost" href={`/app/clips/${c.id}/publier`}>
+                      Publier
+                    </a>
                     {c.hasWords && (
                       <button className="btn-ghost" onClick={() => setEditingWords(editingWords === c.id ? null : c.id)}>
                         Sous-titres

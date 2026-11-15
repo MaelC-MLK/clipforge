@@ -10,6 +10,11 @@ const SLICE_MINUTES = 25;
 
 export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-opus-5-5";
 
+export function costUsd(model: string, inputTokens: number, outputTokens: number): number {
+  const [priceIn, priceOut] = PRICES[model] ?? PRICES["claude-opus-5-5"];
+  return (inputTokens * priceIn + outputTokens * priceOut) / 1e6;
+}
+
 /** Coût approximatif de l'analyse Claude d'une source de `duration` secondes, affiché avant de la lancer. */
 export function estimateAnalysisUsd(duration: number, model = CLAUDE_MODEL): number {
   const [priceIn, priceOut] = PRICES[model] ?? PRICES["claude-opus-5-5"];

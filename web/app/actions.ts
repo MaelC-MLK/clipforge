@@ -4,12 +4,13 @@ import { rm } from "node:fs/promises";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSession, destroySession, requireUser } from "@/lib/auth";
-import { checkKey } from "@/lib/claude";
-import { estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
-import { encrypt, hashKey } from "@/lib/crypto";
+import { checkKey, generateClipMeta } from "@/lib/claude";
+import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
+import { decrypt, encrypt, hashKey } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
 import { type Edit, sanitizeEdit, sanitizeWords, type Word } from "@/lib/edit";
+import { type ClipMeta, DAILY_LIMITS, isProvider, PROVIDERS } from "@/lib/publish";
 import { MAX_CLIP_SECONDS } from "@/lib/upload";
 
 export type FormState = { error?: string; ok?: string };
@@ -246,4 +247,111 @@ export async function analyzeSource(sourceId: string, claude: boolean): Promise<
 export async function deleteCandidate(id: string) {
   const user = await requireUser();
   await db.candidate.deleteMany({ where: { id, userId: user.id } });
+}
+
+/** Titres, descriptions, hashtags et score proposés par Claude pour un clip rendu. Compté dans Usage. */
+export async function generateMeta(clipId: string, language: string): Promise<FormState & { meta?: ClipMeta }> {
+  const user = await requireUser();
+  const clip = await db.clip.findFirst({ where: { id: String(clipId), userId: user.id, status: "rendered" } });
+  if (!clip) return { error: "Clip introuvable ou pas encore rendu." };
+  if ((await monthSpentUsd(user.id)) >= user.monthlyBudgetUsd) return { error: "Budget Claude du mois atteint. Augmente-le dans Compte." };
+
+  const words = sanitizeWords(clip.words, clip.end - clip.start) ?? [];
+  const result = await generateClipMeta(
+    decrypt(user.keyEncrypted),
+    { title: clip.title, seconds: clip.end - clip.start, transcript: words.map((w) => w.w).join(" ") },
+    String(language).slice(0, 30) || "français",
+  );
+  if (result.model)
+    await db.usage.create({
+      data: {
+        userId: user.id,
+        model: result.model,
+        inputTokens: result.inputTokens ?? 0,
+        outputTokens: result.outputTokens ?? 0,
+        costUsd: costUsd(result.model, result.inputTokens ?? 0, result.outputTokens ?? 0),
+      },
+    });
+  if ("error" in result) return { error: result.error };
+  await db.clip.update({ where: { id: clip.id }, data: { meta: result.meta } });
+  return { ok: "Textes proposés par Claude.", meta: result.meta };
+}
+
+/** Planifie la publication d'un clip sur un ou plusieurs comptes. Une date passée publie tout de suite. */
+export async function schedulePublications(input: {
+  clipId: string;
+  accountIds: string[];
+  when: string;
+  texts: { tiktok: string; instagram: string; youtubeTitle: string; youtubeDescription: string };
+  tiktokSound: string;
+}): Promise<FormState> {
+  const user = await requireUser();
+  const clip = await db.clip.findFirst({ where: { id: String(input.clipId), userId: user.id, status: "rendered" } });
+  if (!clip) return { error: "Clip introuvable ou pas encore rendu." };
+  const ids = (Array.isArray(input.accountIds) ? input.accountIds : []).slice(0, 20).map(String);
+  const accounts = await db.account.findMany({ where: { id: { in: ids }, userId: user.id } });
+  if (accounts.length === 0) return { error: "Choisis au moins un compte." };
+
+  const asked = new Date(input.when);
+  if (Number.isNaN(asked.getTime())) return { error: "Date invalide." };
+  if (asked.getTime() > Date.now() + 366 * 24 * 3600 * 1000) return { error: "La date est trop lointaine (un an au plus)." };
+  const scheduledAt = asked.getTime() < Date.now() ? new Date() : asked;
+  const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+  const sound = text(input.tiktokSound, 100);
+
+  for (const account of accounts) {
+    if (!isProvider(account.provider)) continue;
+    // TikTok : seul le plafond des brouillons est connu, donc seuls les brouillons sont comptés.
+    if (account.provider !== "tiktok" || sound) {
+      const sameDay = await db.publication.count({
+        where: {
+          accountId: account.id,
+          status: { not: "failed" },
+          scheduledAt: { gt: new Date(scheduledAt.getTime() - 24 * 3600 * 1000), lt: new Date(scheduledAt.getTime() + 24 * 3600 * 1000) },
+          ...(account.provider === "tiktok" ? { tiktokSound: { not: "" } } : {}),
+        },
+      });
+      if (sameDay >= DAILY_LIMITS[account.provider])
+        return { error: `${PROVIDERS[account.provider]} (${account.name}) : plafond de ${DAILY_LIMITS[account.provider]} par 24 heures atteint autour de cette date.` };
+    }
+  }
+
+  for (const account of accounts) {
+    const publication = await db.publication.create({
+      data: {
+        userId: user.id,
+        clipId: clip.id,
+        accountId: account.id,
+        scheduledAt,
+        title: account.provider === "youtube" ? text(input.texts?.youtubeTitle, 100) || clip.title.slice(0, 100) : "",
+        description:
+          account.provider === "youtube" ? text(input.texts?.youtubeDescription, 4000) : text(account.provider === "tiktok" ? input.texts?.tiktok : input.texts?.instagram, 2200),
+        tiktokSound: account.provider === "tiktok" ? sound : "",
+      },
+    });
+    // Le job attend dans la file jusqu'à `runAt` : c'est lui, la planification.
+    await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "publish", payload: { publicationId: publication.id }, runAt: scheduledAt } });
+  }
+  return { ok: accounts.length > 1 ? `${accounts.length} publications planifiées.` : "Publication planifiée." };
+}
+
+export async function cancelPublication(id: string) {
+  const user = await requireUser();
+  // Le worker ne trouve plus la ligne et abandonne le job.
+  await db.publication.deleteMany({ where: { id, userId: user.id, status: { in: ["scheduled", "failed"] } } });
+}
+
+export async function retryPublication(id: string): Promise<FormState> {
+  const user = await requireUser();
+  const { count } = await db.publication.updateMany({ where: { id, userId: user.id, status: "failed" }, data: { status: "scheduled", error: null, scheduledAt: new Date() } });
+  if (!count) return { error: "Publication introuvable." };
+  const publication = await db.publication.findUniqueOrThrow({ where: { id } });
+  await db.job.create({ data: { userId: user.id, clipId: publication.clipId, type: "publish", payload: { publicationId: id } } });
+  return { ok: "Nouvelle tentative lancée." };
+}
+
+/** Déconnecte un compte. Ses publications (passées et à venir) disparaissent avec lui. */
+export async function deleteAccount(id: string) {
+  const user = await requireUser();
+  await db.account.deleteMany({ where: { id, userId: user.id } });
 }

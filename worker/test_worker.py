@@ -3,9 +3,10 @@
 import unittest
 from pathlib import Path
 
-from crypto import decrypt
+from crypto import decrypt, encrypt
 from detect import (bucket_mean, build_candidates, clean_moments, combine, cost_usd, estimate_cost, format_slice,
                     mean_score, normalize, pick_moments, slices, spread, why)
+from publish import MB, clip_bytes, public_token, tiktok_chunks
 from render import (build_ass, build_srt, crop_size, crop_x_expr, group_lines, keep_intervals, loud_peaks, remap_time,
                     remap_words, render_cmd, select_expr, smooth, speech_segments, voice_cmd)
 from worker import Fatal, check_duration, proxy_cmd
@@ -26,6 +27,11 @@ WORDS = [
 class CryptoTest(unittest.TestCase):
     def test_dechiffre_le_vecteur_ecrit_par_le_web(self):
         self.assertEqual(decrypt(VECTOR, MASTER_KEY), "sk-ant-clé-de-test")
+
+    def test_chiffre_comme_le_web(self):
+        self.assertEqual(encrypt("sk-ant-clé-de-test", MASTER_KEY, bytes([7] * 12)), VECTOR)
+        self.assertEqual(decrypt(encrypt("jeton", MASTER_KEY), MASTER_KEY), "jeton")
+        self.assertNotEqual(encrypt("jeton", MASTER_KEY), encrypt("jeton", MASTER_KEY))  # vecteur d'initialisation aléatoire
 
     def test_refuse_un_chiffre_modifie(self):
         with self.assertRaises(Exception):
@@ -322,6 +328,31 @@ class DetectTest(unittest.TestCase):
         # 1 h : 3 tranches de 25 min, 15 600 + 1 500 tokens en entrée, 9 000 en sortie.
         self.assertAlmostEqual(estimate_cost(3600, "claude-opus-5-5"), (17100 * 4 + 9000 * 20) / 1e6)
         self.assertGreater(estimate_cost(1, "claude-opus-5-5"), 0)
+
+
+class PublishTest(unittest.TestCase):
+    def test_morceaux_tiktok(self):
+        self.assertEqual(tiktok_chunks(3 * MB), (3 * MB, 1))  # petit fichier : un seul envoi
+        self.assertEqual(tiktok_chunks(64 * MB), (64 * MB, 1))
+        chunk, count = tiktok_chunks(95 * MB + 123)
+        self.assertEqual((chunk, count), (10 * MB, 9))  # nombre arrondi vers le bas
+        last = 95 * MB + 123 - chunk * (count - 1)  # le dernier morceau absorbe le reste
+        self.assertTrue(5 * MB <= last <= 128 * MB)
+        for size in (64 * MB + 1, 500 * MB, 4000 * MB):
+            chunk, count = tiktok_chunks(size)
+            self.assertTrue(1 <= count <= 1000 and 5 * MB <= chunk <= 64 * MB and size - chunk * (count - 1) <= 128 * MB)
+
+    def test_description_coupee_en_octets(self):
+        self.assertEqual(clip_bytes("éé", 3), "é")  # jamais de caractère coupé en deux
+        self.assertEqual(clip_bytes("abc", 10), "abc")
+
+    def test_jeton_du_lien_public(self):
+        import os
+        os.environ["SERVER_SALT"] = "sel"
+        # Même valeur attendue dans web/lib/oauth.test.ts : HMAC-SHA256("sel", "publication:abc").
+        self.assertEqual(public_token("abc"), "afac5cf79658b3eed0b8718e713ce385d6618691b1ac950b6fbf07ae62395484")
+        self.assertNotEqual(public_token("abc"), public_token("abd"))
+        self.assertEqual(len(public_token("abc")), 64)
 
 
 if __name__ == "__main__":
