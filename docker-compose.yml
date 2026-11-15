@@ -38,8 +38,10 @@ services:
     environment:
       DATABASE_URL: postgresql://clipforge:clipforge@postgres:5432/clipforge
       DATA_DIR: /data
+      HF_HOME: /models # cache du modèle Whisper, téléchargé au premier rendu
     volumes:
       - ./data:/data
+      - models:/models
     depends_on:
       web: # le web crée les tables au démarrage
         condition: service_healthy
@@ -47,3 +49,4 @@ services:
 
 volumes:
   pgdata:
+  models:

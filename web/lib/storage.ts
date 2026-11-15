@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { db } from "./db";
 
@@ -7,8 +8,11 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR ?? "../data");
 export const abs = (rel: string) => path.join(DATA_DIR, rel);
 
 export async function usedBytes(userId: string): Promise<number> {
-  const r = await db.source.aggregate({ where: { userId }, _sum: { sizeBytes: true } });
-  return Number(r._sum.sizeBytes ?? 0);
+  const [sources, clips] = await Promise.all([
+    db.source.aggregate({ where: { userId }, _sum: { sizeBytes: true } }),
+    db.clip.aggregate({ where: { userId }, _sum: { sizeBytes: true } }),
+  ]);
+  return Number(sources._sum.sizeBytes ?? 0) + Number(clips._sum.sizeBytes ?? 0);
 }
 
 export const quotaBytes = (user: { storageQuotaGb: number }) => user.storageQuotaGb * 1024 ** 3;
@@ -33,3 +37,38 @@ export async function listSources(userId: string) {
 }
 
 export type SourceRow = Awaited<ReturnType<typeof listSources>>[number];
+
+export async function listClips(userId: string, sourceId: string) {
+  const clips = await db.clip.findMany({
+    where: { userId, sourceId },
+    orderBy: { createdAt: "desc" },
+    include: { jobs: { orderBy: { createdAt: "desc" }, take: 1 } },
+  });
+  return clips.map((c) => ({
+    id: c.id,
+    title: c.title,
+    start: c.start,
+    end: c.end,
+    status: c.status,
+    error: c.error,
+    hasSrt: c.srtPath !== null,
+    hasWords: Array.isArray(c.words) && c.words.length > 0,
+    progress: c.jobs[0]?.progress ?? 0,
+  }));
+}
+
+/** Musiques de l'utilisateur : les noms des fichiers de data/{userId}/music. */
+export const listMusic = (userId: string) =>
+  readdir(abs(`${userId}/music`)).then(
+    (names) => names.sort(),
+    () => [] as string[], // dossier pas encore créé
+  );
+
+/** Sources prêtes, pour choisir une vidéo secondaire. */
+export const listReadySources = (userId: string) =>
+  db.source.findMany({ where: { userId, status: "ready" }, orderBy: { createdAt: "desc" }, select: { id: true, title: true } });
+
+export const listTemplates = (userId: string) =>
+  db.template.findMany({ where: { userId }, orderBy: { name: "asc" }, select: { id: true, name: true, edit: true } });
+
+export type ClipRow = Awaited<ReturnType<typeof listClips>>[number];

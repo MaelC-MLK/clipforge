@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
 import type { SourceRow } from "@/lib/storage";
 import { CHUNK, VIDEO_EXT } from "@/lib/upload";
@@ -60,9 +61,14 @@ export function Library({ initial }: { initial: SourceRow[] }) {
                   {(s.status === "downloading" || s.status === "analyzing") && ` ${s.progress} %`}
                 </span>
                 {s.status === "ready" && (
-                  <button className="btn-ghost" onClick={() => setPlaying(playing === s.id ? null : s.id)}>
-                    {playing === s.id ? "Fermer" : "Voir"}
-                  </button>
+                  <>
+                    <Link href={`/app/sources/${s.id}`} className="btn">
+                      Créer des clips
+                    </Link>
+                    <button className="btn-ghost" onClick={() => setPlaying(playing === s.id ? null : s.id)}>
+                      {playing === s.id ? "Fermer" : "Voir"}
+                    </button>
+                  </>
                 )}
                 <button
                   className="btn-ghost"

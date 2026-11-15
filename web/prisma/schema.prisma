@@ -10,15 +10,17 @@ datasource db {
 // Les statuts sont des String (pas des enums) : le worker Python écrit dans ces tables en SQL brut.
 
 model User {
-  id               String   @id @default(cuid())
-  keyHash          String   @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
+  templates        Template[]
+  id               String     @id @default(cuid())
+  keyHash          String     @unique // HMAC-SHA256(SERVER_SALT, clé Claude)
   keyEncrypted     String // AES-256-GCM, base64(iv | chiffré | tag)
   recoveryEmail    String?
-  monthlyBudgetUsd Float    @default(20)
-  storageQuotaGb   Float    @default(20)
-  createdAt        DateTime @default(now())
+  monthlyBudgetUsd Float      @default(20)
+  storageQuotaGb   Float      @default(20)
+  createdAt        DateTime   @default(now())
   sessions         Session[]
   sources          Source[]
+  clips            Clip[]
   jobs             Job[]
   usages           Usage[]
 }
@@ -46,8 +48,32 @@ model Source {
   error     String?
   createdAt DateTime @default(now())
   jobs      Job[]
+  clips     Clip[]
 
   @@index([userId])
+}
+
+model Clip {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceId   String
+  source     Source   @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title      String
+  start      Float // secondes dans la source
+  end        Float
+  edit       Json // réglages du montage : type Edit de lib/edit.ts
+  words      Json? // [{ w, start, end }] relatifs au début du clip, écrits par le worker ou corrigés par l'utilisateur
+  language   String? // langue détectée, pour la voix de synthèse
+  status     String   @default("rendering") // rendering | rendered | error
+  error      String?
+  outputPath String? // relatif à DATA_DIR
+  srtPath    String?
+  sizeBytes  BigInt   @default(0)
+  createdAt  DateTime @default(now())
+  jobs       Job[]
+
+  @@index([sourceId])
 }
 
 model Job {
@@ -56,7 +82,9 @@ model Job {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceId  String?
   source    Source?  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  type      String // ingest
+  clipId    String?
+  clip      Clip?    @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  type      String // ingest | render
   payload   Json
   status    String   @default("queued") // queued | running | done | failed
   progress  Int      @default(0) // 0-100
@@ -81,4 +109,16 @@ model Usage {
   createdAt    DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+// Préréglage de montage réutilisable.
+model Template {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  edit      Json
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }

@@ -1,10 +1,14 @@
 import { getUser } from "@/lib/auth";
-import { listSources } from "@/lib/storage";
+import { listClips, listSources } from "@/lib/storage";
 
-// SSE : renvoie la bibliothèque de l'utilisateur à chaque changement (relue en base toutes les secondes).
+// SSE : renvoie la bibliothèque de l'utilisateur (ou les clips d'une source avec ?source=ID)
+// à chaque changement. La base est relue toutes les secondes.
 export async function GET(req: Request) {
   const user = await getUser();
   if (!user) return new Response(null, { status: 401 });
+
+  const sourceId = new URL(req.url).searchParams.get("source");
+  const load = () => (sourceId ? listClips(user.id, sourceId) : listSources(user.id));
 
   const encoder = new TextEncoder();
   let timer: ReturnType<typeof setInterval>;
@@ -13,7 +17,7 @@ export async function GET(req: Request) {
       let last = "";
       const tick = async () => {
         try {
-          const data = JSON.stringify(await listSources(user.id));
+          const data = JSON.stringify(await load());
           if (data === last) return;
           last = data;
           controller.enqueue(encoder.encode(`data: ${data}\n\n`));

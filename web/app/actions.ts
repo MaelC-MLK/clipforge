@@ -7,7 +7,9 @@ import { createSession, destroySession, requireUser } from "@/lib/auth";
 import { checkKey } from "@/lib/claude";
 import { encrypt, hashKey } from "@/lib/crypto";
 import { db } from "@/lib/db";
-import { abs, quotaBytes, usedBytes } from "@/lib/storage";
+import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
+import { type Edit, sanitizeEdit, sanitizeWords, type Word } from "@/lib/edit";
+import { MAX_CLIP_SECONDS } from "@/lib/upload";
 
 export type FormState = { error?: string; ok?: string };
 
@@ -114,6 +116,109 @@ export async function importUrl(_: FormState, form: FormData): Promise<FormState
 
 export async function deleteSource(id: string) {
   const user = await requireUser();
-  const { count } = await db.source.deleteMany({ where: { id, userId: user.id } });
-  if (count) await rm(abs(`${user.id}/sources/${id}`), { recursive: true, force: true });
+  const clips = await db.clip.findMany({ where: { sourceId: id, userId: user.id }, select: { id: true } });
+  const { count } = await db.source.deleteMany({ where: { id, userId: user.id } }); // supprime aussi ses clips en base
+  if (!count) return;
+  await rm(abs(`${user.id}/sources/${id}`), { recursive: true, force: true });
+  for (const clip of clips) await rm(abs(`${user.id}/clips/${clip.id}`), { recursive: true, force: true });
+}
+
+/** Réglages nettoyés, ou un message d'erreur si une musique ou une vidéo secondaire n'est pas à l'utilisateur. */
+async function checkedEdit(userId: string, input: unknown): Promise<Edit | string> {
+  const edit = sanitizeEdit(input);
+  if (edit.music && !(await listMusic(userId)).includes(edit.music)) return "Musique introuvable.";
+  if (edit.stackSourceId && !(await db.source.findFirst({ where: { id: edit.stackSourceId, userId, status: "ready" } })))
+    return "Vidéo secondaire introuvable.";
+  return edit;
+}
+
+export async function createClip(input: { sourceId: string; title: string; start: number; end: number; edit: unknown }): Promise<FormState> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
+  if (!source) return { error: "Source introuvable ou pas encore prête." };
+
+  const start = Number(input.start);
+  const end = Number(input.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end > (source.duration ?? 0) + 0.5)
+    return { error: "Le début et la fin doivent être dans la vidéo." };
+  if (end - start < 1) return { error: "Un clip dure au moins 1 seconde." };
+  if (end - start > MAX_CLIP_SECONDS) return { error: `Un clip dure au maximum ${MAX_CLIP_SECONDS} secondes.` };
+  const edit = await checkedEdit(user.id, { ...Object(input.edit), customWords: false });
+  if (typeof edit === "string") return { error: edit };
+  if ((await usedBytes(user.id)) >= quotaBytes(user))
+    return { error: "Quota de stockage atteint. Supprime des sources ou des clips pour continuer." };
+
+  const clip = await db.clip.create({
+    data: {
+      userId: user.id,
+      sourceId: source.id,
+      title: String(input.title).trim().slice(0, 150) || source.title.slice(0, 150),
+      start,
+      end,
+      edit,
+    },
+  });
+  await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "render", payload: { clipId: clip.id } } });
+  return { ok: "Rendu lancé." };
+}
+
+/** Relance le rendu de clips existants, avec de nouveaux réglages et/ou des sous-titres corrigés. */
+export async function rerenderClips(input: { ids: string[]; edit?: unknown; words?: unknown }): Promise<FormState> {
+  const user = await requireUser();
+  const ids = (Array.isArray(input.ids) ? input.ids : []).slice(0, 100).map(String);
+  const edit = input.edit === undefined ? undefined : await checkedEdit(user.id, input.edit);
+  if (typeof edit === "string") return { error: edit };
+
+  // Un clip en cours de rendu n'est pas relancé : deux rendus écriraient dans le même dossier.
+  const clips = await db.clip.findMany({ where: { id: { in: ids }, userId: user.id, status: { not: "rendering" } } });
+  for (const clip of clips) {
+    const words = input.words === undefined ? undefined : sanitizeWords(input.words, clip.end - clip.start);
+    if (words === null) return { error: "Sous-titres invalides." };
+    const previous = sanitizeEdit(clip.edit);
+    // Les mots déjà corrigés et le cadrage propre au clip survivent à l'application d'un template.
+    const next: Edit = edit
+      ? { ...edit, customWords: previous.customWords, keyframes: previous.keyframes, facecam: previous.facecam }
+      : previous;
+    if (words) next.customWords = true;
+    await db.clip.update({
+      where: { id: clip.id },
+      data: { edit: next, status: "rendering", error: null, ...(words ? { words } : {}) },
+    });
+    await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "render", payload: { clipId: clip.id } } });
+  }
+  return clips.length ? { ok: clips.length > 1 ? `${clips.length} rendus relancés.` : "Rendu relancé." } : { error: "Aucun clip à relancer." };
+}
+
+export async function getClipWords(id: string): Promise<Word[]> {
+  const user = await requireUser();
+  const clip = await db.clip.findFirst({ where: { id, userId: user.id }, select: { words: true, start: true, end: true } });
+  return clip ? (sanitizeWords(clip.words, clip.end - clip.start) ?? []) : [];
+}
+
+export async function saveTemplate(name: string, edit: unknown): Promise<FormState> {
+  const user = await requireUser();
+  const clean = String(name).trim().slice(0, 60);
+  if (!clean) return { error: "Donne un nom au template." };
+  if ((await db.template.count({ where: { userId: user.id } })) >= 50) return { error: "50 templates au maximum." };
+  // Un template ne transporte pas ce qui est propre à un clip.
+  const data = { ...sanitizeEdit(edit), customWords: false, keyframes: [] };
+  await db.template.create({ data: { userId: user.id, name: clean, edit: data } });
+  return { ok: "Template enregistré." };
+}
+
+export async function deleteTemplate(id: string) {
+  const user = await requireUser();
+  await db.template.deleteMany({ where: { id, userId: user.id } });
+}
+
+export async function deleteClip(id: string) {
+  const user = await requireUser();
+  const { count } = await db.clip.deleteMany({ where: { id, userId: user.id } });
+  if (count) await rm(abs(`${user.id}/clips/${id}`), { recursive: true, force: true });
+}
+
+export async function deleteMusic(name: string) {
+  const user = await requireUser();
+  // Seulement un nom présent dans sa bibliothèque : jamais de chemin fourni par le navigateur.
+  if ((await listMusic(user.id)).includes(name)) await rm(abs(`${user.id}/music/${name}`), { force: true });
 }

@@ -1,3 +1,6 @@
 psycopg[binary]==3.2.*
 yt-dlp[default]
 cryptography
+faster-whisper
+opencv-python-headless<5  # la v5 n'inclut plus le détecteur Haar utilisé par track_face
+piper-tts
