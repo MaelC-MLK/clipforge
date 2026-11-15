@@ -6,7 +6,7 @@ import { CROPS, DEFAULT_EDIT, type Edit, FONTS, keyframeX, POSITIONS, PRESETS, t
 import type { SourceState } from "@/lib/storage";
 import { MAX_CLIP_SECONDS, MUSIC_EXT } from "@/lib/upload";
 import { Moments } from "./moments";
-import { createClip, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate } from "../../../actions";
+import { createClip, createClipsBatch, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate } from "../../../actions";
 
 const CROP_LABELS: Record<(typeof CROPS)[number], string> = {
   face: "Suivi automatique du visage",
@@ -197,6 +197,7 @@ function WordsEditor({ clipId, onDone }: { clipId: string; onDone: (message: { e
 }
 
 export function Editor({
+  purged,
   sourceId,
   duration,
   initial,
@@ -206,6 +207,7 @@ export function Editor({
   sources,
   templates,
 }: {
+  purged: boolean;
   sourceId: string;
   duration: number;
   initial: SourceState;
@@ -295,7 +297,13 @@ export function Editor({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
-      <div className="space-y-4">
+      {purged && (
+        <p className="card h-fit text-sm text-zinc-300">
+          La vidéo d&apos;origine a été supprimée automatiquement (réglage « Supprimer les fichiers des sources » dans Compte). Les clips déjà rendus
+          restent disponibles : tu peux les voir, les télécharger et les publier, mais plus les refaire.
+        </p>
+      )}
+      <div className={purged ? "hidden" : "space-y-4"}>
         <div className="grid items-start gap-4 sm:grid-cols-[1fr_auto]">
           <video ref={video} className="w-full rounded bg-black" src={`/api/sources/${sourceId}/video`} controls />
           <Preview video={video} edit={edit} start={start} end={end} manualX={manualX} />
@@ -310,6 +318,7 @@ export function Editor({
           onSeek={(t) => {
             if (video.current) video.current.currentTime = t;
           }}
+          onBatch={(ids) => run(() => createClipsBatch({ sourceId, candidateIds: ids, edit }))}
           onPick={(c) => {
             setStart(Math.round(c.start * 10) / 10);
             setEnd(Math.round(c.end * 10) / 10);
@@ -690,14 +699,14 @@ export function Editor({
                     <a className="btn-ghost" href={`/app/clips/${c.id}/publier`}>
                       Publier
                     </a>
-                    {c.hasWords && (
+                    {c.hasWords && !purged && (
                       <button className="btn-ghost" onClick={() => setEditingWords(editingWords === c.id ? null : c.id)}>
                         Sous-titres
                       </button>
                     )}
                   </>
                 )}
-                {c.status !== "rendering" && (
+                {c.status !== "rendering" && !purged && (
                   <button className="btn-ghost" disabled={pending} onClick={() => run(() => rerenderClips({ ids: [c.id], edit }))}>
                     Refaire avec les réglages actuels
                   </button>

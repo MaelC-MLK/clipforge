@@ -605,10 +605,30 @@ def analyze(conn, job):
         )
 
 
+def account_token(conn, account: dict) -> str:
+    """Jeton d'accès d'un compte de réseau, renouvelé et enregistré s'il est bientôt périmé.
+
+    account : ligne avec accountId, provider, accessToken, refreshToken, expiresAt.
+    """
+    token = decrypt(account["accessToken"])
+    # Instagram (jeton de 60 jours) : renouvelé dès qu'il reste moins d'une semaine.
+    margin = timedelta(days=7) if account["provider"] == "instagram" else timedelta(minutes=5)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # la base stocke des dates UTC sans fuseau
+    if account["expiresAt"] and account["expiresAt"] - margin < now:
+        if account["provider"] == "instagram" and account["expiresAt"] < now:
+            raise Fatal("L'autorisation Instagram a expiré. Reconnecte ce compte dans Réseaux.")
+        token, renewal, seconds = networks.refresh(account["provider"], token, decrypt(account["refreshToken"]) if account["refreshToken"] else None)
+        conn.execute(
+            'UPDATE "Account" SET "accessToken" = %s, "refreshToken" = %s, "expiresAt" = %s WHERE id = %s',
+            [encrypt(token), encrypt(renewal) if renewal else None, now + timedelta(seconds=seconds), account["accountId"]],
+        )
+    return token
+
+
 def publish(conn, job):
     """Publie un clip sur un compte de réseau social, à l'heure prévue (le job attend dans la file jusque-là)."""
     pub = conn.execute(
-        'SELECT p.*, c."outputPath", a.provider, a."externalId", a."accessToken", a."refreshToken", a."expiresAt" '
+        'SELECT p.*, c."outputPath", a.provider, a."externalId" AS "accountExternalId", a."accessToken", a."refreshToken", a."expiresAt" '
         'FROM "Publication" p JOIN "Clip" c ON c.id = p."clipId" JOIN "Account" a ON a.id = p."accountId" WHERE p.id = %s',
         [job["payload"]["publicationId"]],
     ).fetchone()
@@ -618,18 +638,7 @@ def publish(conn, job):
         raise Fatal("Le clip n'est pas rendu. Refais son rendu, puis replanifie.")
     conn.execute('UPDATE "Publication" SET status = %s, error = NULL WHERE id = %s', ["publishing", pub["id"]])
 
-    token = decrypt(pub["accessToken"])
-    # Jeton bientôt périmé : renouvelé et enregistré avant de publier. Instagram (60 jours) : dès qu'il reste moins d'une semaine.
-    margin = timedelta(days=7) if pub["provider"] == "instagram" else timedelta(minutes=5)
-    now = datetime.now(timezone.utc).replace(tzinfo=None)  # la base stocke des dates UTC sans fuseau
-    if pub["expiresAt"] and pub["expiresAt"] - margin < now:
-        if pub["provider"] == "instagram" and pub["expiresAt"] < now:
-            raise Fatal("L'autorisation Instagram a expiré. Reconnecte ce compte dans Réseaux.")
-        token, renewal, seconds = networks.refresh(pub["provider"], token, decrypt(pub["refreshToken"]) if pub["refreshToken"] else None)
-        conn.execute(
-            'UPDATE "Account" SET "accessToken" = %s, "refreshToken" = %s, "expiresAt" = %s WHERE id = %s',
-            [encrypt(token), encrypt(renewal) if renewal else None, now + timedelta(seconds=seconds), pub["accountId"]],
-        )
+    token = account_token(conn, pub)
 
     file = DATA / pub["outputPath"]
     if pub["provider"] == "youtube":
@@ -638,12 +647,58 @@ def publish(conn, job):
         result = networks.tiktok(token, file, pub["description"], draft=bool(pub["tiktokSound"].strip()))
     else:
         url = f'{os.environ.get("APP_URL", "http://localhost:3000").rstrip("/")}/api/public/{pub["id"]}/{networks.public_token(pub["id"])}'
-        result = networks.instagram(token, pub["externalId"], url, pub["description"])
-    status, link, note = result
-    conn.execute('UPDATE "Publication" SET status = %s, "postUrl" = %s, note = %s, error = NULL WHERE id = %s', [status, link, note, pub["id"]])
+        result = networks.instagram(token, pub["accountExternalId"], url, pub["description"])
+    status, link, note, external = result
+    conn.execute('UPDATE "Publication" SET status = %s, "postUrl" = %s, note = %s, "externalId" = %s, error = NULL WHERE id = %s',
+                 [status, link, note, external, pub["id"]])
 
 
-HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze, "publish": publish}
+def stats(conn, job):
+    """Relit les vues et les « J'aime » des posts publiés d'un utilisateur, là où l'API du réseau le permet."""
+    rows = conn.execute(
+        'SELECT p.id, p."externalId", a.id AS "accountId", a.provider, a."accessToken", a."refreshToken", a."expiresAt" '
+        'FROM "Publication" p JOIN "Account" a ON a.id = p."accountId" '
+        "WHERE p.\"userId\" = %s AND p.status = 'published' AND p.\"externalId\" IS NOT NULL AND a.provider IN ('youtube', 'instagram')",
+        [job["userId"]],
+    ).fetchall()
+    accounts: dict[str, list[dict]] = {}
+    for row in rows:
+        accounts.setdefault(row["accountId"], []).append(row)
+    for posts in accounts.values():
+        try:  # un compte déconnecté ou en panne ne bloque pas les autres
+            token = account_token(conn, posts[0])
+            if posts[0]["provider"] == "youtube":
+                found = {}
+                for i in range(0, len(posts), 50):
+                    found.update(networks.youtube_stats(token, [p["externalId"] for p in posts[i:i + 50]]))
+            else:
+                found = {p["externalId"]: networks.instagram_stats(token, p["externalId"]) for p in posts}
+        except Exception:
+            traceback.print_exc()
+            continue
+        for post in posts:
+            if post["externalId"] in found:
+                views, likes = found[post["externalId"]]
+                conn.execute(f'UPDATE "Publication" SET views = %s, likes = %s, "statsAt" = {NOW} WHERE id = %s', [views, likes, post["id"]])
+
+
+def purge(conn):
+    """Supprime les fichiers des sources plus vieilles que le délai choisi par leur propriétaire. Les clips rendus restent."""
+    old = conn.execute(
+        f'''SELECT s.id, s."userId" FROM "Source" s JOIN "User" u ON u.id = s."userId"
+        WHERE u."purgeDays" IS NOT NULL AND s.status = 'ready' AND s."createdAt" < {NOW} - u."purgeDays" * interval '1 day'
+          AND NOT EXISTS (
+            SELECT 1 FROM "Job" j WHERE j.status IN ('queued', 'running') AND j.type <> 'publish'
+              AND (j."sourceId" = s.id OR j."clipId" IN (SELECT c.id FROM "Clip" c WHERE c."sourceId" = s.id))
+          )'''
+    ).fetchall()
+    for source in old:
+        shutil.rmtree(DATA / source["userId"] / "sources" / source["id"], ignore_errors=True)
+        conn.execute('UPDATE "Source" SET status = %s, "filePath" = NULL, "proxyPath" = NULL, "sizeBytes" = 0 WHERE id = %s', ["purged", source["id"]])
+        print(f"Source {source['id']} purgée.", flush=True)
+
+
+HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze, "publish": publish, "stats": stats}
 
 
 def run(conn, job):
@@ -671,6 +726,14 @@ def run(conn, job):
                 shutil.rmtree(DATA / src["userId"] / "sources" / job["sourceId"], ignore_errors=True)
         if job["type"] == "publish":
             conn.execute('UPDATE "Publication" SET status = %s, error = %s WHERE id = %s', ["failed", message, job["payload"].get("publicationId")])
+            try:  # prévenir par email ; un envoi raté ne doit rien casser d'autre
+                user = conn.execute('SELECT email FROM "User" WHERE id = %s', [job["userId"]]).fetchone()
+                app = os.environ.get("APP_URL", "http://localhost:3000").rstrip("/")
+                networks.send_mail(user["email"], "ClipForge : une publication a échoué",
+                                   f"Une publication planifiée n'a pas pu partir.\n\nRaison : {message}\n\n"
+                                   f"Tu peux la relancer ou télécharger le clip pour le publier à la main : {app}/app/calendrier\n")
+            except Exception:
+                traceback.print_exc()
         if job["clipId"] and job["type"] == "render":
             conn.execute('UPDATE "Clip" SET status = %s, error = %s WHERE id = %s', ["error", message, job["clipId"]])
 
@@ -681,7 +744,14 @@ def main():
         # dont "updatedAt" est vieux (worker mort), pas tous les jobs en cours.
         conn.execute("UPDATE \"Job\" SET status = 'queued' WHERE status = 'running'")
         print("Worker prêt.", flush=True)
+        last_purge = 0.0
         while True:
+            if time.time() - last_purge > float(os.environ.get("PURGE_EVERY_SECONDS", "600")):
+                last_purge = time.time()
+                try:
+                    purge(conn)
+                except Exception:
+                    traceback.print_exc()
             job = conn.execute(CLAIM).fetchone()
             if job:
                 print(f"Job {job['id']} ({job['type']}), tentative {job['attempts']}", flush=True)

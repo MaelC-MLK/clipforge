@@ -1,5 +1,6 @@
 "use server";
 
+import { createHash, randomBytes } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
@@ -10,6 +11,8 @@ import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
 import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
+import { mailConfigured, sendMail } from "@/lib/mail";
+import { APP_URL } from "@/lib/oauth";
 import { type Edit, sanitizeEdit, sanitizeWords, type Word } from "@/lib/edit";
 import { hashPassword, MAX_PASSWORD, MIN_PASSWORD, verifyPassword } from "@/lib/password";
 import { type ClipMeta, DAILY_LIMITS, isProvider, PROVIDERS } from "@/lib/publish";
@@ -108,7 +111,11 @@ export async function saveAccount(_: FormState, form: FormData): Promise<FormSta
   const user = await requireUser();
   const budget = Number(form.get("budget"));
   if (!Number.isFinite(budget) || budget < 0 || budget > 10_000) return { error: "Budget invalide." };
-  await db.user.update({ where: { id: user.id }, data: { monthlyBudgetUsd: budget } });
+  const purge = String(form.get("purge") ?? "").trim();
+  const purgeDays = purge === "" ? null : Number(purge);
+  if (purgeDays !== null && (!Number.isInteger(purgeDays) || purgeDays < 1 || purgeDays > 3650))
+    return { error: "Délai de suppression invalide : un nombre de jours entre 1 et 3650, ou vide pour ne jamais supprimer." };
+  await db.user.update({ where: { id: user.id }, data: { monthlyBudgetUsd: budget, purgeDays } });
   return { ok: "Enregistré." };
 }
 
@@ -196,7 +203,7 @@ export async function rerenderClips(input: { ids: string[]; edit?: unknown; word
   if (typeof edit === "string") return { error: edit };
 
   // Un clip en cours de rendu n'est pas relancé : deux rendus écriraient dans le même dossier.
-  const clips = await db.clip.findMany({ where: { id: { in: ids }, userId: user.id, status: { not: "rendering" } } });
+  const clips = await db.clip.findMany({ where: { id: { in: ids }, userId: user.id, status: { not: "rendering" }, source: { status: "ready" } } });
   for (const clip of clips) {
     const words = input.words === undefined ? undefined : sanitizeWords(input.words, clip.end - clip.start);
     if (words === null) return { error: "Sous-titres invalides." };
@@ -380,4 +387,79 @@ export async function retryPublication(id: string): Promise<FormState> {
 export async function deleteAccount(id: string) {
   const user = await requireUser();
   await db.account.deleteMany({ where: { id, userId: user.id } });
+}
+
+/** Crée d'un coup un clip par moment proposé, avec les mêmes réglages. */
+export async function createClipsBatch(input: { sourceId: string; candidateIds: string[]; edit: unknown }): Promise<FormState> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
+  if (!source) return { error: "Source introuvable ou pas encore prête." };
+  const ids = (Array.isArray(input.candidateIds) ? input.candidateIds : []).slice(0, 20).map(String);
+  const candidates = await db.candidate.findMany({ where: { id: { in: ids }, userId: user.id, sourceId: source.id }, orderBy: { score: "desc" } });
+  if (candidates.length === 0) return { error: "Aucun moment à transformer en clip." };
+  const edit = await checkedEdit(user.id, { ...Object(input.edit), customWords: false, keyframes: [] });
+  if (typeof edit === "string") return { error: edit };
+  if ((await usedBytes(user.id)) >= quotaBytes(user)) return { error: "Quota de stockage atteint. Supprime des sources ou des clips pour continuer." };
+
+  for (const c of candidates) {
+    const clip = await db.clip.create({
+      data: { userId: user.id, sourceId: source.id, title: c.title.slice(0, 150), start: c.start, end: Math.min(c.end, c.start + MAX_CLIP_SECONDS), edit },
+    });
+    await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "render", payload: { clipId: clip.id } } });
+  }
+  return { ok: `${candidates.length} rendus lancés. Ils passent l'un après l'autre.` };
+}
+
+/** Demande au worker de relire les vues et les « J'aime » des posts publiés. */
+export async function refreshStats(): Promise<FormState> {
+  const user = await requireUser();
+  if (await db.job.findFirst({ where: { userId: user.id, type: "stats", status: { in: ["queued", "running"] } } })) return { ok: "Relevé déjà en cours." };
+  await db.job.create({ data: { userId: user.id, type: "stats", payload: {} } });
+  return { ok: "Relevé lancé." };
+}
+
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
+/** Envoie un lien de réinitialisation. La réponse est la même que le compte existe ou non. */
+export async function requestReset(_: FormState, form: FormData): Promise<FormState> {
+  if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
+  const email = String(form.get("email") ?? "").trim().toLowerCase();
+  const user = await db.user.findUnique({ where: { email } });
+  if (user) {
+    const token = randomBytes(32).toString("hex");
+    await db.passwordReset.deleteMany({ where: { userId: user.id } }); // un seul lien valable à la fois
+    await db.passwordReset.create({ data: { userId: user.id, tokenHash: sha256(token), expiresAt: new Date(Date.now() + 3600 * 1000) } });
+    const link = `${APP_URL}/reinitialiser/${token}`;
+    const sent = await sendMail(
+      email,
+      "ClipForge : choisir un nouveau mot de passe",
+      `Bonjour,\n\nPour choisir un nouveau mot de passe, ouvre ce lien (valable une heure, utilisable une fois) :\n\n${link}\n\nSi tu n'as rien demandé, ignore ce message : ton mot de passe ne change pas.\n`,
+    ).catch((e) => {
+      console.error(e);
+      return false;
+    });
+    // Sans serveur d'email, l'administrateur retrouve le lien dans le journal du serveur.
+    if (!sent) console.log(`[ClipForge] Lien de réinitialisation pour ${email} : ${link}`);
+  }
+  return {
+    ok: mailConfigured()
+      ? "Si un compte existe avec cet email, un lien vient d'être envoyé. Il est valable une heure."
+      : "Si un compte existe avec cet email, un lien a été créé. L'envoi d'emails n'est pas configuré sur ce serveur : demande le lien à l'administrateur.",
+  };
+}
+
+export async function resetPassword(_: FormState, form: FormData): Promise<FormState> {
+  if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
+  const password = String(form.get("password") ?? "");
+  if (password.length < MIN_PASSWORD) return { error: `Le mot de passe doit faire au moins ${MIN_PASSWORD} caractères.` };
+  if (password.length > MAX_PASSWORD) return { error: "Mot de passe trop long." };
+  if (password !== String(form.get("confirm") ?? "")) return { error: "Les deux mots de passe ne sont pas identiques." };
+  const reset = await db.passwordReset.findUnique({ where: { tokenHash: sha256(String(form.get("token") ?? "")) } });
+  if (!reset || reset.expiresAt < new Date()) return { error: "Ce lien a expiré ou a déjà servi. Refais une demande." };
+
+  await db.user.update({ where: { id: reset.userId }, data: { passwordHash: await hashPassword(password) } });
+  await db.passwordReset.deleteMany({ where: { userId: reset.userId } });
+  await db.session.deleteMany({ where: { userId: reset.userId } }); // quiconque était connecté avec l'ancien mot de passe est déconnecté
+  await createSession(reset.userId);
+  redirect("/app");
 }

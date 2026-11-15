@@ -20,8 +20,10 @@ export default async function LoginPage() {
             Créer un compte
           </Link>
         </p>
-        <p className="mt-3 text-xs text-zinc-500">
-          Mot de passe oublié : la réinitialisation par email n&apos;est pas encore disponible. Contacte l&apos;administrateur du site.
+        <p className="mt-2 text-sm text-zinc-400">
+          <Link href="/mot-de-passe-oublie" className="font-medium text-violet-300 hover:text-violet-200">
+            Mot de passe oublié ?
+          </Link>
         </p>
       </div>
     </main>

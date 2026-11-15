@@ -82,8 +82,8 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       </section>
 
       <section className="card">
-        <h2 className="text-lg font-semibold">Budget</h2>
-        <AccountForm budget={user.monthlyBudgetUsd} />
+        <h2 className="text-lg font-semibold">Budget et stockage</h2>
+        <AccountForm budget={user.monthlyBudgetUsd} purgeDays={user.purgeDays} />
       </section>
 
       <section className="card">

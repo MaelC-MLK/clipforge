@@ -58,6 +58,7 @@ export function Moments(props: {
   estimateUsd: number;
   budgetLeftUsd: number;
   onSeek: (t: number) => void;
+  onBatch: (candidateIds: string[]) => void;
   onPick: (candidate: SourceState["candidates"][number]) => void;
 }) {
   const { analysis, candidates } = props.state;
@@ -127,6 +128,20 @@ export function Moments(props: {
 
         {analysis.scores.length > 0 && candidates.length === 0 && !running && (
           <p className="text-sm text-zinc-500">Aucun moment ne ressort. Tu peux toujours découper à la main.</p>
+        )}
+        {candidates.length > 1 && (
+          <div>
+            <button
+              className="btn-ghost"
+              onClick={() =>
+                confirm(`Lancer le rendu des ${Math.min(candidates.length, 10)} meilleurs moments avec les réglages actuels de l'éditeur ?`) &&
+                props.onBatch(candidates.slice(0, 10).map((c) => c.id))
+              }
+            >
+              Créer les {Math.min(candidates.length, 10)} meilleurs clips d&apos;un coup
+            </button>
+            <p className="mt-1 text-xs text-zinc-500">Chaque clip reprend les bornes et le titre du moment, avec le cadrage, les sous-titres et le son réglés plus bas.</p>
+          </div>
         )}
         <ul className="space-y-2">
           {candidates.map((c) => (

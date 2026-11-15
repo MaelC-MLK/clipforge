@@ -10,7 +10,7 @@ import { Editor } from "./editor";
 export default async function SourcePage({ params }: { params: Promise<{ id: string }> }) {
   const user = await requireUser();
   const { id } = await params;
-  const source = await db.source.findFirst({ where: { id, userId: user.id, status: "ready" } });
+  const source = await db.source.findFirst({ where: { id, userId: user.id, status: { in: ["ready", "purged"] } } });
   if (!source) notFound();
 
   return (
@@ -20,6 +20,7 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
       </Link>
       <h1 className="truncate text-xl font-semibold">{source.title}</h1>
       <Editor
+        purged={source.status === "purged"}
         sourceId={source.id}
         duration={source.duration ?? 0}
         initial={await sourceState(user.id, source.id)}

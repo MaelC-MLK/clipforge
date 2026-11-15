@@ -1,7 +1,7 @@
 """Publication d'un clip sur YouTube, TikTok ou Instagram, par leurs API officielles.
 
 Écrit d'après les documentations officielles de novembre 2026 (adresses dans le README).
-Chaque fonction renvoie (statut, lien du post ou None, note ou None).
+Chaque fonction de publication renvoie (statut, lien du post ou None, note ou None, identifiant du post ou None).
 """
 
 import hashlib
@@ -83,7 +83,8 @@ def youtube(token: str, file: Path, title: str, description: str):
     with file.open("rb") as f:
         done = check(requests.put(upload_url, data=f, timeout=1800, headers={
             "Authorization": f"Bearer {token}", "Content-Length": str(size), "Content-Type": "video/mp4"}), "YouTube")
-    return "published", f"https://www.youtube.com/shorts/{done.json()['id']}", None
+    video = done.json()["id"]
+    return "published", f"https://www.youtube.com/shorts/{video}", None, video
 
 
 def clean(text: str) -> str:
@@ -167,14 +168,14 @@ def tiktok(token: str, file: Path, caption: str, draft: bool):
         if state.get("status") == "FAILED":
             raise Refused(f"TikTok a rejeté la vidéo : {state.get('fail_reason', 'raison inconnue')}.")
         if state.get("status") == "SEND_TO_USER_INBOX":
-            return "draft_sent", None, None
+            return "draft_sent", None, None, None
         if state.get("status") == "PUBLISH_COMPLETE":
             ids = state.get("publicaly_available_post_id") or []  # orthographe de la doc TikTok
             if ids and username:
-                return "published", f"https://www.tiktok.com/@{username}/video/{ids[0]}", note
-            return "published", None, note or "Publié. TikTok ne donne le lien qu'après sa modération."
+                return "published", f"https://www.tiktok.com/@{username}/video/{ids[0]}", note, str(ids[0])
+            return "published", None, note or "Publié. TikTok ne donne le lien qu'après sa modération.", None
         time.sleep(float(os.environ.get("POLL_SECONDS", "5")))
-    return ("draft_sent" if draft else "published"), None, "Vidéo envoyée. TikTok n'avait pas fini de la traiter : vérifie dans l'appli."
+    return ("draft_sent" if draft else "published"), None, "Vidéo envoyée. TikTok n'avait pas fini de la traiter : vérifie dans l'appli.", None
 
 
 def instagram(token: str, user_id: str, video_url: str, caption: str):
@@ -200,4 +201,43 @@ def instagram(token: str, user_id: str, video_url: str, caption: str):
         link = requests.get(api("graph.instagram.com", f"/v27.0/{media}"), timeout=TIMEOUT, headers=auth, params={"fields": "permalink"}).json().get("permalink")
     except (requests.RequestException, ValueError):
         link = None  # publié quand même : seul le lien manque
-    return "published", link, None
+    return "published", link, None, media
+
+
+def youtube_stats(token: str, ids: list[str]) -> dict[str, tuple[int | None, int | None]]:
+    """Vues et mentions « J'aime » de vidéos YouTube (50 au plus par appel) : {identifiant: (vues, likes)}."""
+    items = check(requests.get(api("www.googleapis.com", "/youtube/v3/videos"), timeout=TIMEOUT, headers={"Authorization": f"Bearer {token}"},
+                               params={"part": "statistics", "id": ",".join(ids)}), "YouTube").json().get("items", [])
+    number = lambda v: int(v) if v is not None else None
+    return {i["id"]: (number(i.get("statistics", {}).get("viewCount")), number(i.get("statistics", {}).get("likeCount"))) for i in items}
+
+
+def instagram_stats(token: str, media: str) -> tuple[int | None, int | None]:
+    """Mentions « J'aime » d'un Reel. Les vues demandent l'API Insights, non branchée : (None, likes)."""
+    data = check(requests.get(api("graph.instagram.com", f"/v27.0/{media}"), timeout=TIMEOUT, headers={"Authorization": f"Bearer {token}"},
+                              params={"fields": "like_count,comments_count"}), "Instagram").json()
+    return None, data.get("like_count")
+
+
+def send_mail(to: str, subject: str, body: str) -> bool:
+    """Envoie un email si SMTP_URL est configuré (smtp://utilisateur:motdepasse@hôte:port, ou smtps://). Sinon ne fait rien."""
+    import smtplib
+    from email.message import EmailMessage
+    from urllib.parse import unquote, urlparse
+
+    url = urlparse(os.environ.get("SMTP_URL") or "")
+    if not url.hostname:
+        return False
+    message = EmailMessage()
+    message["From"] = os.environ.get("MAIL_FROM") or "ClipForge <no-reply@localhost>"
+    message["To"] = to
+    message["Subject"] = subject
+    message.set_content(body)
+    smtp_class = smtplib.SMTP_SSL if url.scheme == "smtps" else smtplib.SMTP
+    with smtp_class(url.hostname, url.port or (465 if url.scheme == "smtps" else 587), timeout=20) as smtp:
+        if url.scheme != "smtps" and smtp.has_extn("starttls"):
+            smtp.starttls()
+        if url.username:
+            smtp.login(unquote(url.username), unquote(url.password or ""))
+        smtp.send_message(message)
+    return True

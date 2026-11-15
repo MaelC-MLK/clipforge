@@ -10,18 +10,20 @@ datasource db {
 // Les statuts sont des String (pas des enums) : le worker Python écrit dans ces tables en SQL brut.
 
 model User {
+  purgeDays        Int? // supprime les fichiers des sources plus vieilles que ce nombre de jours ; vide = jamais
+  resets           PasswordReset[]
   accounts         Account[]
   publications     Publication[]
   analyses         Analysis[]
   candidates       Candidate[]
   templates        Template[]
-  id               String        @id @default(cuid())
-  email            String        @unique // en minuscules
+  id               String          @id @default(cuid())
+  email            String          @unique // en minuscules
   passwordHash     String // scrypt, voir lib/password.ts
   keyEncrypted     String? // clé API Claude, AES-256-GCM, base64(iv | chiffré | tag). Absente tant que l'utilisateur ne l'a pas ajoutée
-  monthlyBudgetUsd Float         @default(20)
-  storageQuotaGb   Float         @default(20)
-  createdAt        DateTime      @default(now())
+  monthlyBudgetUsd Float           @default(20)
+  storageQuotaGb   Float           @default(20)
+  createdAt        DateTime        @default(now())
   sessions         Session[]
   sources          Source[]
   clips            Clip[]
@@ -92,7 +94,7 @@ model Job {
   source    Source?  @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   clipId    String?
   clip      Clip?    @relation(fields: [clipId], references: [id], onDelete: Cascade)
-  type      String // ingest | render | analyze | publish
+  type      String // ingest | render | analyze | publish | stats
   payload   Json
   status    String   @default("queued") // queued | running | done | failed
   progress  Int      @default(0) // 0-100
@@ -181,22 +183,35 @@ model Account {
 
 // Un clip à publier sur un compte, à une date donnée. Le worker l'exécute par un job `publish`.
 model Publication {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   clipId      String
-  clip        Clip     @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  clip        Clip      @relation(fields: [clipId], references: [id], onDelete: Cascade)
   accountId   String
-  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  account     Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
   scheduledAt DateTime
-  status      String   @default("scheduled") // scheduled | publishing | published | draft_sent | failed
+  status      String    @default("scheduled") // scheduled | publishing | published | draft_sent | failed
   title       String // titre YouTube ; vide pour les autres réseaux
   description String // légende (TikTok, Instagram) ou description (YouTube), hashtags compris
-  tiktokSound String   @default("") // nom du son à ajouter à la main : la vidéo part alors en brouillon TikTok
+  tiktokSound String    @default("") // nom du son à ajouter à la main : la vidéo part alors en brouillon TikTok
   postUrl     String?
+  externalId  String? // identifiant du post chez le réseau, pour relire ses statistiques
+  views       Int?
+  likes       Int?
+  statsAt     DateTime? // dernière lecture des statistiques
   error       String?
   note        String? // information non bloquante (publié en privé, lien pas encore disponible…)
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
 
   @@index([userId, scheduledAt])
+}
+
+// Lien de réinitialisation du mot de passe, envoyé par email. Seul le hash du jeton est stocké.
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
 }

@@ -9,12 +9,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <>
       <header className="border-b border-zinc-800">
-        <nav className="mx-auto flex max-w-5xl items-center gap-6 px-4 py-3 text-sm">
+        <nav className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
           <Link href="/app" className="text-base font-bold">
             Clip<span className="text-violet-500">Forge</span>
           </Link>
           <Link href="/app" className="text-zinc-300 hover:text-white">
             Bibliothèque
+          </Link>
+          <Link href="/app/tableau" className="text-zinc-300 hover:text-white">
+            Tableau de bord
           </Link>
           <Link href="/app/calendrier" className="text-zinc-300 hover:text-white">
             Calendrier

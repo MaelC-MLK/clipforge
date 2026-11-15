@@ -11,6 +11,7 @@ const STATUS: Record<string, string> = {
   analyzing: "Préparation",
   ready: "Prêt",
   error: "Erreur",
+  purged: "Vidéo supprimée, clips gardés",
 };
 
 function formatDuration(seconds: number | null) {
@@ -60,6 +61,11 @@ export function Library({ initial }: { initial: SourceRow[] }) {
                   {STATUS[s.status] ?? s.status}
                   {(s.status === "downloading" || s.status === "analyzing") && ` ${s.progress} %`}
                 </span>
+                {s.status === "purged" && (
+                  <Link href={`/app/sources/${s.id}`} className="btn-ghost">
+                    Voir les clips
+                  </Link>
+                )}
                 {s.status === "ready" && (
                   <>
                     <Link href={`/app/sources/${s.id}`} className="btn">

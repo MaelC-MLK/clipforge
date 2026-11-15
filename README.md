@@ -4,13 +4,14 @@ Studio de clipping : importer une VOD ou une vidéo, repérer les meilleurs mome
 
 ![Page d'accueil de ClipForge](docs/accueil.png)
 
-État actuel : **phase 5**.
+État actuel : **phase 6**, la dernière du plan.
 
 - Phase 1 (socle) : comptes par email et mot de passe, clé API Claude ajoutée dans le compte, import par URL ou par fichier, file de jobs, bibliothèque avec progression en temps réel, page Utilisation.
 - Phase 2 (clip de base) : découpe d'un extrait, recadrage vertical 9:16, sous-titres karaoké mot par mot, voix de synthèse en option, musique de fond, rendu 1080x1920 H.264/AAC, export SRT.
 - Phase 3 (éditeur complet) : cadrage manuel par images clés, split facecam/jeu, vidéo secondaire empilée, styles de sous-titres et correction du texte, accroche, filigrane, barre de progression, zoom sur les pics sonores, coupe des silences, normalisation du volume, miniature, templates, aperçu vertical en direct.
 - Phase 4 (détection) : score des meilleurs moments par tranche de 10 secondes (volume sonore, « Most replayed » de YouTube, clips des viewers Twitch, lecture du transcript par Claude), heatmap cliquable, clips candidats à charger dans l'éditeur ou à rejeter, coût Claude estimé avant et compté après.
 - Phase 5 (publication) : connexion de comptes YouTube, TikTok et Instagram par OAuth, textes de publication et score proposés par Claude, planification par compte, publication automatique par le worker, calendrier et liste avec statut, lien du post, nouvelle tentative et téléchargement de secours.
+- Phase 6 (finitions) : tableau de bord, statistiques des posts, clips par lots, suppression automatique des vidéos d'origine, mot de passe oublié par email, email en cas d'échec de publication.
 
 ## Architecture
 
@@ -83,6 +84,13 @@ Ce que fait chaque réseau (documentations officielles de novembre 2026) :
 **Son TikTok.** L'API TikTok n'a aucun champ pour choisir un son de sa bibliothèque. Si le champ « Son TikTok » est rempli, la vidéo part en brouillon dans la boîte de réception TikTok du compte ; l'utilisateur l'ouvre dans l'appli, ajoute le son et publie. TikTok accepte 5 brouillons en attente par 24 heures.
 
 **X (Twitter)** n'est pas branché : le bouton « Télécharger le clip » sert de secours pour les réseaux sans connexion.
+
+## Suivi et confort
+
+- **Tableau de bord** : sources, clips produits, publiés, planifiés, en échec, et le détail par compte. « Actualiser les statistiques » lance un job `stats` qui relit les vues et les « J'aime » des posts : YouTube donne les deux, Instagram les « J'aime » seulement, TikTok rien avec les droits demandés.
+- **Clips par lots** : après une analyse, « Créer les meilleurs clips d'un coup » lance le rendu des 10 meilleurs moments au plus, avec les réglages de l'éditeur. Les rendus passent l'un après l'autre.
+- **Suppression automatique** (Compte) : passé le nombre de jours choisi, la vidéo d'origine d'une source est supprimée pour libérer le stockage. Les clips rendus restent visibles, téléchargeables et publiables ; ils ne peuvent plus être refaits. Le worker vérifie toutes les dix minutes.
+- **Emails** (facultatif, `SMTP_URL`) : lien de réinitialisation du mot de passe (valable une heure, une seule fois) et alerte quand une publication échoue. Sans serveur d'email, le lien de réinitialisation est écrit dans le journal du conteneur `web`, où l'administrateur peut le récupérer.
 
 ### Applications développeur
 
@@ -167,17 +175,17 @@ Le même vecteur de chiffrement est vérifié des deux côtés : ce que le web c
 
 ## Limites connues
 
-- Pas d'envoi d'email : ni vérification de l'adresse à l'inscription, ni réinitialisation du mot de passe oublié.
+- L'adresse email n'est pas vérifiée à l'inscription.
 - La migration `accounts` supprime les anciens comptes identifiés par leur seule clé Claude (ils n'avaient pas d'email pour se reconnecter).
 - Le coût Claude affiché est une estimation calculée à partir des tokens consommés, pas la facture d'Anthropic.
 - Publication : code écrit d'après les documentations officielles et testé contre de faux serveurs qui imitent Google, TikTok et Instagram, jamais contre les vraies plateformes (il faut des applications développeur).
-- Publication : pas de notification par email en cas d'échec (pastille dans le menu seulement), pas de statistiques des posts, X non branché.
+- Publication : X non branché. Statistiques : pas de vues pour Instagram, rien pour TikTok.
 - TikTok : si l'envoi réussit mais que la vérification finale échoue, la publication est marquée comme envoyée sans lien, pour ne jamais publier deux fois.
 - Densité du chat Twitch / Kick : pas prise en compte. Aucune API officielle ne donne le chat d'une rediffusion.
 - Clips des viewers Twitch : code écrit d'après la documentation Helix, jamais exécuté contre la vraie API (il faut des identifiants d'application Twitch).
 - Signal sonore : volume seulement, pas de reconnaissance des rires ou des cris.
 - Un seul worker. Pour en lancer plusieurs, voir le commentaire `shortcut` dans `worker/worker.py`.
-- Stockage sur disque local uniquement (S3 prévu en phase 6).
+- Stockage sur disque local uniquement, pas de S3.
 - Suivi du visage : détecteur Haar d'OpenCV, fiable sur les visages de face. Sans visage détecté, le cadre reste centré.
 - Transcription sur processeur : compter environ la durée du clip. Un clip dure 180 secondes au maximum.
 - Aperçu de l'éditeur : approximatif. Le suivi du visage, les zooms, la coupe des silences et le vrai texte des sous-titres ne se voient qu'au rendu.
