@@ -14,7 +14,7 @@ export default async function CalendarPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Calendrier des publications</h1>
+      <h1 className="page-title">Calendrier des publications</h1>
       <Calendar
         items={rows.flatMap((p) =>
           isProvider(p.account.provider)

@@ -79,7 +79,7 @@ export function PublishForm(props: {
         </div>
         <p className="text-xs text-zinc-500">Un appel à Claude avec ta clé, de l&apos;ordre d&apos;un centime. Tout reste modifiable.</p>
         {meta && (
-          <p className="rounded border border-zinc-800 p-3 text-sm">
+          <p className="rounded-xl border border-white/10 p-3 text-sm">
             <span className="font-medium text-violet-300">Potentiel estimé : {meta.viralScore} / 100.</span> {meta.viralReason}{" "}
             <span className="text-zinc-500">Estimation indicative, pas une prédiction.</span>
           </p>

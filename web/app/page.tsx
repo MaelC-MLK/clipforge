@@ -1,3 +1,4 @@
+import { LegalLinks } from "./legal";
 import Link from "next/link";
 import { getUser } from "@/lib/auth";
 import { KeyGuide } from "./key-guide";
@@ -200,9 +201,9 @@ export default async function Landing() {
       <footer className="border-t border-white/10">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-6 text-xs text-zinc-500">
           <p>N&apos;importe que du contenu dont tu détiens les droits ou pour lequel tu as l&apos;autorisation. Respecte les règles de chaque plateforme.</p>
-          <a href="https://github.com/MaelC-MLK/clipforge" target="_blank" rel="noreferrer" className="hover:text-zinc-300">
-            Code source
-          </a>
+          <span className="flex gap-4">
+            <LegalLinks />
+          </span>
         </div>
       </footer>
     </div>

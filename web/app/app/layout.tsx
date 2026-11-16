@@ -3,51 +3,36 @@ import { requireUser } from "@/lib/auth";
 import { usesSubscription } from "@/lib/claude";
 import { db } from "@/lib/db";
 import { logout } from "../actions";
+import { Nav } from "./nav";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
   const failed = await db.publication.count({ where: { userId: user.id, status: "failed" } });
   return (
-    <>
-      <header className="border-b border-zinc-800">
-        <nav className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
-          <Link href="/app" className="text-base font-bold">
-            Hook<span className="text-violet-500">lip</span>
+    <div className="app-shell min-h-screen">
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-[#07060e]/80 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+          <Link href="/app" className="text-lg font-bold">
+            Hook<span className="gradient-text">lip</span>
           </Link>
-          <Link href="/app" className="text-zinc-300 hover:text-white">
-            Bibliothèque
-          </Link>
-          <Link href="/app/tableau" className="text-zinc-300 hover:text-white">
-            Tableau de bord
-          </Link>
-          <Link href="/app/calendrier" className="text-zinc-300 hover:text-white">
-            Calendrier
-            {failed > 0 && (
-              <span className="ml-1 rounded-full bg-red-600 px-1.5 py-0.5 text-xs text-white" title="Publications en échec">
-                {failed}
-              </span>
-            )}
-          </Link>
-          <Link href="/app/reseaux" className="text-zinc-300 hover:text-white">
-            Réseaux
-          </Link>
-          <Link href="/app/compte" className="text-zinc-300 hover:text-white">
-            Utilisation et compte
-          </Link>
-          <form action={logout} className="ml-auto">
-            <button className="btn-ghost">Se déconnecter</button>
-          </form>
-        </nav>
+          <Nav failed={failed} />
+          <div className="ml-auto flex items-center gap-3">
+            <span className="hidden max-w-48 truncate text-xs text-zinc-500 lg:block">{user.email}</span>
+            <form action={logout}>
+              <button className="btn-ghost">Se déconnecter</button>
+            </form>
+          </div>
+        </div>
       </header>
       {!user.keyEncrypted && !usesSubscription(user) && (
-        <p className="border-b border-violet-900/60 bg-violet-950/40 px-4 py-2 text-center text-sm text-violet-200">
+        <p className="border-b border-violet-400/20 bg-violet-500/10 px-4 py-2 text-center text-sm text-violet-200">
           Il te manque une clé API Claude pour l&apos;analyse des meilleurs moments et les textes de publication.{" "}
           <Link href="/app/compte#cle" className="font-medium underline">
             L&apos;ajouter
           </Link>
         </p>
       )}
-      <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
-    </>
+      <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+    </div>
   );
 }

@@ -170,17 +170,22 @@ Traefik obtient le certificat HTTPS tout seul à la première visite. En product
 
 Pour mettre à jour : copier la nouvelle version du code, puis relancer la même commande. Les migrations de la base s'appliquent au démarrage du web.
 
-## Développer le web hors Docker
+## Développer en local
 
-Plus rapide pour modifier l'interface (rechargement à chaud) :
+Sans reconstruire d'image à chaque changement : la base et le worker tournent dans Docker, le site en rechargement à chaud.
 
 ```bash
-docker compose up postgres worker
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres worker
 ```
 
 ```bash
-cd web && cp ../.env .env && npm install && npx prisma migrate dev && npm run dev
+cd web && npm install && npx prisma migrate deploy && npm run dev
 ```
+
+- Le site est sur http://localhost:3000. `web/.env` est une copie de `.env` dont `DATABASE_URL` vise le port 5433 et `DATA_DIR` vaut `../data`.
+- La base écoute sur le port 5433 de la machine (le 5432 est souvent pris par un autre projet).
+- Le worker lit le code du dossier `worker/` : après un changement, `docker compose -f docker-compose.yml -f docker-compose.dev.yml restart worker` suffit.
+- La mise en ligne reste une étape à part (section « Mettre en ligne »).
 
 ## Tests
 

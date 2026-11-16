@@ -17,7 +17,7 @@ export default async function PublishPage({ params }: { params: Promise<{ id: st
       <Link href={`/app/sources/${clip.sourceId}`} className="text-sm text-zinc-400 hover:text-zinc-200">
         ← Retour au montage
       </Link>
-      <h1 className="truncate text-xl font-semibold">Publier « {clip.title} »</h1>
+      <h1 className="page-title truncate">Publier « {clip.title} »</h1>
       <div className="grid items-start gap-6 md:grid-cols-[auto_1fr]">
         <video className="mx-auto max-h-[28rem] rounded bg-black" src={`/api/clips/${clip.id}/video`} controls />
         <PublishForm

@@ -19,7 +19,7 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
       <Link href="/app" className="text-sm text-zinc-400 hover:text-zinc-200">
         ← Bibliothèque
       </Link>
-      <h1 className="truncate text-xl font-semibold">{source.title}</h1>
+      <h1 className="page-title truncate">{source.title}</h1>
       <Editor
         purged={source.status === "purged"}
         sourceId={source.id}

@@ -676,7 +676,7 @@ export function Editor({
               {c.status === "rendering" && (
                 <>
                   <p className="mt-2 text-sm text-violet-300">Rendu {c.progress} %</p>
-                  <div className="mt-1 h-1.5 rounded bg-zinc-800" role="progressbar" aria-valuenow={c.progress} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={c.progress} aria-valuemin={0} aria-valuemax={100}>
                     <div className="h-full rounded bg-violet-500 transition-all" style={{ width: `${c.progress}%` }} />
                   </div>
                 </>

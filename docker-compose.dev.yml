@@ -1,0 +1,14 @@
+# Développement local, sans reconstruire d'image à chaque changement :
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres worker
+#   cd web && npx prisma migrate deploy && npm run dev      (site sur http://localhost:3000, rechargé à chaud)
+# Après un changement dans worker/ : docker compose -f docker-compose.yml -f docker-compose.dev.yml restart worker
+services:
+  postgres:
+    ports: !override ["127.0.0.1:5433:5432"] # 5433 : le 5432 est souvent pris par un autre projet
+
+  worker:
+    volumes:
+      - ./worker:/app # le worker lit le code du dossier : un redémarrage suffit
+    depends_on: !override
+      postgres:
+        condition: service_healthy

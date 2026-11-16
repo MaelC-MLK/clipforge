@@ -31,13 +31,13 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Tableau de bord</h1>
+      <h1 className="page-title">Tableau de bord</h1>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {tiles.map(([label, value]) => (
           <div key={label} className="card !p-4">
-            <p className="text-2xl font-bold">{value}</p>
             <p className="text-xs text-zinc-400">{label}</p>
+            <p className={`mt-1 text-3xl font-bold tabular-nums ${label === "En échec" && value !== "0" ? "text-red-400" : ""}`}>{value}</p>
           </div>
         ))}
       </div>
@@ -68,7 +68,7 @@ export default async function DashboardPage() {
               </thead>
               <tbody>
                 {accounts.map((a) => (
-                  <tr key={a.id} className="border-t border-zinc-800">
+                  <tr key={a.id} className="border-t border-white/10">
                     <td className="py-2 pr-4">
                       {isProvider(a.provider) ? PROVIDERS[a.provider] : a.provider} · {a.name}
                     </td>
@@ -88,7 +88,7 @@ export default async function DashboardPage() {
       <section className="card">
         <h2 className="font-medium">Posts publiés</h2>
         {top.length === 0 && <p className="mt-2 text-sm text-zinc-500">Rien de publié pour l&apos;instant.</p>}
-        <ul className="mt-2 divide-y divide-zinc-800 text-sm">
+        <ul className="mt-2 divide-y divide-white/10 text-sm">
           {top.map((p) => (
             <li key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2">
               <span className="min-w-0 truncate">

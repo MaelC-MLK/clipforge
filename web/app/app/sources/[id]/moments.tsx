@@ -76,7 +76,7 @@ export function Moments(props: {
         {running ? (
           <div>
             <p className="text-sm text-violet-300">Analyse en cours : {analysis.job?.progress ?? 0} %</p>
-            <div className="mt-1 h-1.5 rounded bg-zinc-800" role="progressbar" aria-valuenow={analysis.job?.progress ?? 0} aria-valuemin={0} aria-valuemax={100}>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={analysis.job?.progress ?? 0} aria-valuemin={0} aria-valuemax={100}>
               <div className="h-full rounded bg-violet-500 transition-all" style={{ width: `${analysis.job?.progress ?? 0}%` }} />
             </div>
           </div>
@@ -148,7 +148,7 @@ export function Moments(props: {
         )}
         <ul className="space-y-2">
           {candidates.map((c) => (
-            <li key={c.id} className="rounded border border-zinc-800 p-3">
+            <li key={c.id} className="rounded-xl border border-white/10 p-3">
               <div className="flex items-baseline justify-between gap-3">
                 <p className="min-w-0 truncate font-medium">{c.title}</p>
                 <span className="whitespace-nowrap text-sm text-violet-300" title="Score indicatif, de 0 à 100">

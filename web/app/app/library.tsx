@@ -34,6 +34,10 @@ export function Library({ initial }: { initial: SourceRow[] }) {
 
   return (
     <div className="space-y-6">
+      <div>
+        <h1 className="page-title">Bibliothèque</h1>
+        <p className="mt-1 text-sm text-zinc-400">Importe une vidéo, puis découpe-la en clips verticaux.</p>
+      </div>
       <div className="grid gap-4 md:grid-cols-2">
         <UrlForm />
         <UploadForm />
@@ -44,8 +48,14 @@ export function Library({ initial }: { initial: SourceRow[] }) {
       </p>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold">Sources</h2>
-        {sources.length === 0 && <p className="text-sm text-zinc-500">Aucune source pour l&apos;instant.</p>}
+        <h2 className="mb-3 text-lg font-semibold">
+          Sources {sources.length > 0 && <span className="text-sm font-normal text-zinc-500">· {sources.length}</span>}
+        </h2>
+        {sources.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-white/15 px-5 py-10 text-center text-sm text-zinc-400">
+            Aucune source pour l&apos;instant. Colle un lien ou envoie un fichier ci-dessus pour commencer.
+          </p>
+        )}
         <ul className="space-y-2">
           {sources.map((s) => (
             <li key={s.id} className="card">
@@ -57,7 +67,8 @@ export function Library({ initial }: { initial: SourceRow[] }) {
                     {s.sizeBytes > 0 && ` · ${(s.sizeBytes / 1024 ** 2).toFixed(0)} Mo`}
                   </p>
                 </div>
-                <span className={`text-sm ${s.status === "error" ? "text-red-400" : s.status === "ready" ? "text-emerald-400" : "text-violet-300"}`}>
+                <span className={`badge ${s.status === "error" ? "text-red-400" : s.status === "ready" ? "text-emerald-400" : "text-violet-300"}`}>
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
                   {STATUS[s.status] ?? s.status}
                   {(s.status === "downloading" || s.status === "analyzing") && ` ${s.progress} %`}
                 </span>
@@ -84,12 +95,12 @@ export function Library({ initial }: { initial: SourceRow[] }) {
                 </button>
               </div>
               {(s.status === "downloading" || s.status === "analyzing") && (
-                <div className="mt-3 h-1.5 rounded bg-zinc-800" role="progressbar" aria-valuenow={s.progress} aria-valuemin={0} aria-valuemax={100}>
-                  <div className="h-full rounded bg-violet-500 transition-all" style={{ width: `${s.progress}%` }} />
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-valuenow={s.progress} aria-valuemin={0} aria-valuemax={100}>
+                  <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-blue-500 transition-all" style={{ width: `${s.progress}%` }} />
                 </div>
               )}
               {s.error && <p className="mt-2 text-sm text-red-400">{s.error}</p>}
-              {playing === s.id && <video className="mt-3 max-h-96 w-full rounded bg-black" src={`/api/sources/${s.id}/video`} controls autoPlay />}
+              {playing === s.id && <video className="mt-3 max-h-96 w-full rounded-xl bg-black" src={`/api/sources/${s.id}/video`} controls autoPlay />}
             </li>
           ))}
         </ul>
@@ -159,7 +170,7 @@ function UploadForm() {
         accept={VIDEO_EXT.join(",")}
         disabled={percent !== null}
         onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
-        className="block w-full text-sm text-zinc-300 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-700 file:px-3 file:py-2 file:text-zinc-100"
+        className="block w-full text-sm text-zinc-300 file:mr-3 file:cursor-pointer file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-zinc-100 hover:file:bg-white/15"
       />
       <p className="text-xs text-zinc-500">Formats : {VIDEO_EXT.join(", ")}. Les gros fichiers sont envoyés par morceaux.</p>
       {percent !== null && <p className="text-sm text-violet-300">Envoi… {percent} %</p>}

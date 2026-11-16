@@ -15,8 +15,8 @@ function Meter({ label, value, max, unit }: { label: string; value: number; max:
           {value.toFixed(2)} / {max.toFixed(2)} {unit}
         </span>
       </div>
-      <div className="mt-1 h-2 rounded bg-zinc-800" role="progressbar" aria-label={label} aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
-        <div className={`h-full rounded ${percent >= 90 ? "bg-red-500" : "bg-violet-500"}`} style={{ width: `${percent}%` }} />
+      <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label={label} aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100}>
+        <div className={`h-full rounded-full ${percent >= 90 ? "bg-red-500" : "bg-gradient-to-r from-violet-500 to-blue-500"}`} style={{ width: `${percent}%` }} />
       </div>
     </div>
   );
@@ -39,6 +39,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
 
   return (
     <div className="space-y-6">
+      <h1 className="page-title">Utilisation et compte</h1>
       {bienvenue && (
         <p role="status" className="rounded-lg border border-violet-800/60 bg-violet-950/40 p-4 text-sm text-violet-100">
           Bienvenue ! Ton compte est créé. Tu peux déjà importer une vidéo depuis la Bibliothèque. Pour l&apos;analyse automatique et les textes de
@@ -71,8 +72,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
         <h2 className="text-lg font-semibold">Clé API Claude</h2>
         {subscription && (
           <p className="mt-1 text-sm text-emerald-400">
-            Mode abonnement actif sur ce compte : Hooklip appelle Claude avec le jeton d&apos;abonnement de cette instance. Aucune clé API n&apos;est
-            nécessaire.
+            Claude est inclus sur ce compte : Hooklip s&apos;en charge, aucune clé API n&apos;est nécessaire.
           </p>
         )}
         {subscription ? null : user.keyEncrypted ? (
@@ -84,7 +84,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
               moments et écrire les textes de publication. C&apos;est ta clé qui est facturée par Anthropic, au tarif d&apos;Anthropic : compte
               environ 0,35 $ par heure de vidéo analysée et 1 centime par clip pour les textes.
             </p>
-            <div className="mt-4 rounded-lg border border-zinc-800 p-4">
+            <div className="mt-4 rounded-xl border border-white/10 p-4">
               <h3 className="mb-3 text-sm font-medium">Comment obtenir une clé</h3>
               <KeyGuide />
             </div>

@@ -137,14 +137,14 @@ export function Calendar({ items }: { items: Item[] }) {
               →
             </button>
           </div>
-          <div className="grid grid-cols-7 gap-px overflow-hidden rounded border border-zinc-800 bg-zinc-800 text-xs">
+          <div className="grid grid-cols-7 gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 text-xs">
             {DAYS.map((d) => (
-              <div key={d} className="bg-zinc-950 p-1 text-center text-zinc-500">
+              <div key={d} className="bg-[#0b0a14] p-2 text-center text-zinc-500">
                 {d}
               </div>
             ))}
             {cells.map((day) => (
-              <div key={day.toISOString()} className={`min-h-20 bg-zinc-950 p-1 ${day.getMonth() === month.getMonth() ? "" : "opacity-40"}`}>
+              <div key={day.toISOString()} className={`min-h-24 bg-[#0b0a14] p-1.5 ${day.getMonth() === month.getMonth() ? "" : "opacity-40"}`}>
                 <div className={sameDay(day, new Date()) ? "font-bold text-violet-400" : "text-zinc-500"}>{day.getDate()}</div>
                 {items
                   .filter((p) => sameDay(new Date(p.at), day))
