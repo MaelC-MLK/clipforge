@@ -116,6 +116,7 @@ export async function saveAccount(_: FormState, form: FormData): Promise<FormSta
   if (purgeDays !== null && (!Number.isInteger(purgeDays) || purgeDays < 1 || purgeDays > 3650))
     return { error: "Délai de suppression invalide : un nombre de jours entre 1 et 3650, ou vide pour ne jamais supprimer." };
   await db.user.update({ where: { id: user.id }, data: { monthlyBudgetUsd: budget, purgeDays } });
+  revalidatePath("/app", "layout"); // sinon le formulaire se vide et réaffiche l'ancienne valeur
   return { ok: "Enregistré." };
 }
 

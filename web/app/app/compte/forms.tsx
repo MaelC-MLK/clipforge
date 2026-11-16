@@ -53,7 +53,7 @@ export function AccountForm({ budget, purgeDays }: { budget: number; purgeDays: 
         <label className="label" htmlFor="budget">
           Budget Claude mensuel ($)
         </label>
-        <input id="budget" name="budget" type="number" min="0" step="1" required defaultValue={budget} className="input" />
+        <input id="budget" name="budget" type="number" min="0" max="10000" step="any" required defaultValue={budget} className="input" />
         <p className="mt-1 text-xs text-zinc-500">Au-delà, Hooklip refuse de lancer de nouveaux appels à Claude jusqu&apos;au mois suivant.</p>
       </div>
       <div>
