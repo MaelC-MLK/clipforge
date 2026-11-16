@@ -203,6 +203,7 @@ export function Editor({
   initial,
   estimateUsd,
   budgetLeftUsd,
+  subscription,
   musicFiles,
   sources,
   templates,
@@ -213,6 +214,7 @@ export function Editor({
   initial: SourceState;
   estimateUsd: number;
   budgetLeftUsd: number;
+  subscription: boolean;
   musicFiles: string[];
   sources: { id: string; title: string }[];
   templates: { id: string; name: string; edit: Edit }[];
@@ -315,6 +317,7 @@ export function Editor({
           state={state}
           estimateUsd={estimateUsd}
           budgetLeftUsd={budgetLeftUsd}
+          subscription={subscription}
           onSeek={(t) => {
             if (video.current) video.current.currentTime = t;
           }}

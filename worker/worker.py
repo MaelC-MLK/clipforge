@@ -1,4 +1,4 @@
-"""Worker ClipForge : prend les jobs dans la table "Job" de Postgres et les exécute un par un."""
+"""Worker Hooklip : prend les jobs dans la table "Job" de Postgres et les exécute un par un."""
 
 import json
 import math
@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import urllib.parse
@@ -23,7 +24,7 @@ from psycopg.types.json import Jsonb
 
 import publish as networks
 from crypto import decrypt, encrypt
-from detect import (BUCKET, bucket_mean, build_candidates, clean_moments, combine, cost_usd, format_slice,
+from detect import (BUCKET, bucket_mean, build_candidates, clean_moments, cli_answer, combine, cost_usd, format_slice,
                     normalize, slices, spread)
 from render import (build_ass, build_srt, keep_intervals, loud_peaks, remap_words, render_cmd, smooth,
                     speech_segments, thumb_cmd, voice_cmd)
@@ -475,16 +476,55 @@ MOMENTS_SCHEMA = {
 }
 
 
+def uses_subscription(user: dict) -> bool:
+    """Mode abonnement : seulement le compte du propriétaire de l'instance, jamais ceux des autres utilisateurs."""
+    owner = (os.environ.get("SUBSCRIPTION_EMAIL") or "").strip().lower()
+    return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")) and bool(owner) and user["email"] == owner
+
+
+def claude_cli(system: str, prompt: str, schema: dict) -> tuple[dict | None, int, int]:
+    """Un appel à Claude par Claude Code (`claude -p`), payé par l'abonnement du jeton CLAUDE_CODE_OAUTH_TOKEN."""
+    # Une clé API dans l'environnement passerait avant le jeton d'abonnement.
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    try:
+        done = subprocess.run(
+            ["claude", "-p", "--output-format", "json", "--json-schema", json.dumps(schema), "--model", CLAUDE_MODEL,
+             "--system-prompt", system, "--tools", "", "--no-session-persistence"],
+            input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=900, env=env, cwd=tempfile.gettempdir(),
+        )
+    except FileNotFoundError:
+        raise Fatal("Claude Code n'est pas installé dans le worker : le mode abonnement ne peut pas tourner.")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Claude Code n'a pas répondu en 15 minutes. Nouvelle tentative plus tard.")
+    data, tokens_in, tokens_out, error = cli_answer(done.stdout)
+    if error:
+        raise Fatal(f"Claude Code (abonnement) a refusé : {error}")
+    return data, tokens_in, tokens_out
+
+
 def claude_moments(conn, user: dict, transcript: list[tuple[float, str]], duration: float, on_progress, notes: list[str]) -> list[dict]:
-    """Fait lire le transcript à Claude, tranche par tranche, avec la clé de l'utilisateur. Chaque appel est noté dans Usage."""
+    """Fait lire le transcript à Claude, tranche par tranche, avec la clé de l'utilisateur ou l'abonnement du propriétaire. Chaque appel est noté dans Usage."""
     import anthropic
 
-    if not user["keyEncrypted"]:
+    subscription = uses_subscription(user)
+    if not subscription and not user["keyEncrypted"]:
         raise Fatal("Aucune clé API Claude sur ce compte. Ajoute-la dans Compte, puis relance l'analyse.")
-    client = anthropic.Anthropic(api_key=decrypt(user["keyEncrypted"], os.environ["MASTER_KEY"]))
+    client = None if subscription else anthropic.Anthropic(api_key=decrypt(user["keyEncrypted"], os.environ["MASTER_KEY"]))
     parts = slices(transcript)
     moments = []
     for i, part in enumerate(parts):
+        if subscription:  # pas de facture : ni budget ni coût, seulement les tokens pour mémoire
+            found, tokens_in, tokens_out = claude_cli(MOMENTS_PROMPT, format_slice(part), MOMENTS_SCHEMA)
+            conn.execute(
+                'INSERT INTO "Usage" (id, "userId", model, "inputTokens", "outputTokens", "costUsd") VALUES (%s, %s, %s, %s, %s, 0)',
+                [uuid.uuid4().hex, user["id"], CLAUDE_MODEL, tokens_in, tokens_out],
+            )
+            if found is None:
+                notes.append(f"Claude n'a pas pu analyser la tranche qui commence à {int(part[0][0] // 60)} min.")
+            else:
+                moments += clean_moments(found.get("moments", []), part[0][0], min(duration, part[-1][0] + 60))
+            on_progress((i + 1) / len(parts))
+            continue
         spent = conn.execute(
             f'SELECT COALESCE(SUM("costUsd"), 0) AS total FROM "Usage" WHERE "userId" = %s AND "createdAt" >= date_trunc(\'month\', {NOW})', [user["id"]],
         ).fetchone()["total"]
@@ -729,7 +769,7 @@ def run(conn, job):
             try:  # prévenir par email ; un envoi raté ne doit rien casser d'autre
                 user = conn.execute('SELECT email FROM "User" WHERE id = %s', [job["userId"]]).fetchone()
                 app = os.environ.get("APP_URL", "http://localhost:3000").rstrip("/")
-                networks.send_mail(user["email"], "ClipForge : une publication a échoué",
+                networks.send_mail(user["email"], "Hooklip : une publication a échoué",
                                    f"Une publication planifiée n'a pas pu partir.\n\nRaison : {message}\n\n"
                                    f"Tu peux la relancer ou télécharger le clip pour le publier à la main : {app}/app/calendrier\n")
             except Exception:

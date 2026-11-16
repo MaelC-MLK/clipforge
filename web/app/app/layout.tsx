@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
+import { usesSubscription } from "@/lib/claude";
 import { db } from "@/lib/db";
 import { logout } from "../actions";
 
@@ -11,7 +12,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <header className="border-b border-zinc-800">
         <nav className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
           <Link href="/app" className="text-base font-bold">
-            Clip<span className="text-violet-500">Forge</span>
+            Hook<span className="text-violet-500">lip</span>
           </Link>
           <Link href="/app" className="text-zinc-300 hover:text-white">
             Bibliothèque
@@ -38,7 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </form>
         </nav>
       </header>
-      {!user.keyEncrypted && (
+      {!user.keyEncrypted && !usesSubscription(user) && (
         <p className="border-b border-violet-900/60 bg-violet-950/40 px-4 py-2 text-center text-sm text-violet-200">
           Il te manque une clé API Claude pour l&apos;analyse des meilleurs moments et les textes de publication.{" "}
           <Link href="/app/compte#cle" className="font-medium underline">

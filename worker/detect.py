@@ -1,5 +1,7 @@
 """Fonctions pures de la détection des meilleurs moments : signaux, score, candidats, coût Claude. Testées dans test_worker.py."""
 
+import json
+
 BUCKET = 10  # secondes par case de la heatmap
 
 # Poids de chaque signal dans le score. Seuls les signaux disponibles comptent, leurs poids sont ramenés à 1.
@@ -135,3 +137,18 @@ def estimate_cost(duration: float, model: str) -> float:
     """
     parts = max(1, -(-duration // (SLICE_MINUTES * 60)))
     return cost_usd(model, round(duration / 60 * 260 + parts * 500), round(parts * 3000))
+
+
+def cli_answer(stdout: str) -> tuple[dict | None, int, int, str | None]:
+    """Lit la sortie JSON de `claude -p` : (réponse structurée ou None, tokens entrée, tokens sortie, erreur ou None)."""
+    try:
+        out = json.loads(stdout)
+        usage = out.get("usage") or {}
+    except (json.JSONDecodeError, AttributeError):
+        return None, 0, 0, "réponse illisible"
+    tokens_in = sum(usage.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+    tokens_out = usage.get("output_tokens") or 0
+    if out.get("is_error"):
+        return None, tokens_in, tokens_out, str(out.get("result") or "erreur sans message")[:300]
+    data = out.get("structured_output")
+    return (data if isinstance(data, dict) else None), tokens_in, tokens_out, None

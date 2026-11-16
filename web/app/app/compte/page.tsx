@@ -1,4 +1,5 @@
 import { requireUser } from "@/lib/auth";
+import { usesSubscription } from "@/lib/claude";
 import { db } from "@/lib/db";
 import { quotaBytes, usedBytes } from "@/lib/storage";
 import { KeyGuide } from "../../key-guide";
@@ -24,6 +25,7 @@ function Meter({ label, value, max, unit }: { label: string; value: number; max:
 export default async function AccountPage({ searchParams }: { searchParams: Promise<{ bienvenue?: string }> }) {
   const user = await requireUser();
   const { bienvenue } = await searchParams;
+  const subscription = usesSubscription(user);
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const [used, month] = await Promise.all([
@@ -45,10 +47,14 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       )}
       <section className="card space-y-4">
         <h2 className="text-lg font-semibold">Utilisation</h2>
-        <Meter label="Coût Claude ce mois-ci" value={month._sum.costUsd ?? 0} max={user.monthlyBudgetUsd} unit="$" />
+        {subscription ? (
+          <p className="text-sm">Claude passe par ton abonnement : pas de coût à l&apos;appel, les analyses consomment ton quota d&apos;abonnement.</p>
+        ) : (
+          <Meter label="Coût Claude ce mois-ci" value={month._sum.costUsd ?? 0} max={user.monthlyBudgetUsd} unit="$" />
+        )}
         <p className="text-xs text-zinc-500">
           {month._count} appel(s) · {(month._sum.inputTokens ?? 0).toLocaleString("fr-FR")} tokens en entrée ·{" "}
-          {(month._sum.outputTokens ?? 0).toLocaleString("fr-FR")} en sortie. Estimation calculée par ClipForge à partir
+          {(month._sum.outputTokens ?? 0).toLocaleString("fr-FR")} en sortie. Estimation calculée par Hooklip à partir
           des tokens consommés. Quand le budget est atteint, les analyses sont bloquées.
         </p>
         <Meter label="Stockage" value={used / 1024 ** 3} max={quotaBytes(user) / 1024 ** 3} unit="Go" />
@@ -63,12 +69,18 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
 
       <section id="cle" className="card scroll-mt-6">
         <h2 className="text-lg font-semibold">Clé API Claude</h2>
-        {user.keyEncrypted ? (
+        {subscription && (
+          <p className="mt-1 text-sm text-emerald-400">
+            Mode abonnement actif sur ce compte : Hooklip appelle Claude avec le jeton d&apos;abonnement de cette instance. Aucune clé API n&apos;est
+            nécessaire.
+          </p>
+        )}
+        {subscription ? null : user.keyEncrypted ? (
           <p className="mt-1 text-sm text-emerald-400">Une clé est enregistrée. Elle est chiffrée et n&apos;est jamais renvoyée à ton navigateur.</p>
         ) : (
           <>
             <p className="mt-1 text-sm text-zinc-400">
-              Sans clé, tu peux importer, monter et exporter. Avec ta clé, ClipForge fait lire tes vidéos à Claude pour repérer les meilleurs
+              Sans clé, tu peux importer, monter et exporter. Avec ta clé, Hooklip fait lire tes vidéos à Claude pour repérer les meilleurs
               moments et écrire les textes de publication. C&apos;est ta clé qui est facturée par Anthropic, au tarif d&apos;Anthropic : compte
               environ 0,35 $ par heure de vidéo analysée et 1 centime par clip pour les textes.
             </p>

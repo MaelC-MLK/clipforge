@@ -229,7 +229,7 @@ def send_mail(to: str, subject: str, body: str) -> bool:
     if not url.hostname:
         return False
     message = EmailMessage()
-    message["From"] = os.environ.get("MAIL_FROM") or "ClipForge <no-reply@localhost>"
+    message["From"] = os.environ.get("MAIL_FROM") or "Hooklip <no-reply@localhost>"
     message["To"] = to
     message["Subject"] = subject
     message.set_content(body)

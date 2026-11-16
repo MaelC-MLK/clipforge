@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { usesSubscription } from "@/lib/claude";
 import { estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { sanitizeEdit } from "@/lib/edit";
 import { listMusic, listReadySources, listTemplates, sourceState } from "@/lib/storage";
@@ -25,6 +26,7 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
         duration={source.duration ?? 0}
         initial={await sourceState(user.id, source.id)}
         estimateUsd={estimateAnalysisUsd(source.duration ?? 0)}
+        subscription={usesSubscription(user)}
         budgetLeftUsd={Math.max(user.monthlyBudgetUsd - (await monthSpentUsd(user.id)), 0)}
         musicFiles={await listMusic(user.id)}
         sources={(await listReadySources(user.id)).filter((s) => s.id !== source.id)}

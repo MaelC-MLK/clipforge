@@ -1,5 +1,7 @@
 FROM node:22-slim
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+# Claude Code : sert seulement au mode abonnement (CLAUDE_CODE_OAUTH_TOKEN).
+RUN npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci

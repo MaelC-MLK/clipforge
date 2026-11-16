@@ -1,8 +1,8 @@
-# ClipForge
+# Hooklip
 
 Studio de clipping : importer une VOD ou une vidéo, repérer les meilleurs moments, monter des clips verticaux et les publier.
 
-![Page d'accueil de ClipForge](docs/accueil.png)
+![Page d'accueil de Hooklip](docs/accueil.png)
 
 État actuel : **phase 6**, la dernière du plan.
 
@@ -139,7 +139,36 @@ docker compose up --build
 
 4. Ouvrir http://localhost:3000, créer un compte (email et mot de passe), puis ajouter sa clé API Claude dans Compte. La page d'accueil et la page Compte expliquent comment en obtenir une sur [platform.claude.com](https://platform.claude.com/settings/keys).
 
+### Sans clé API : le mode abonnement
+
+Sur une instance que tu fais tourner pour toi, Claude peut passer par ton abonnement Claude (Pro, Max…) au lieu d'une clé API facturée à l'usage :
+
+1. Installer [Claude Code](https://code.claude.com/docs/en/setup) sur ta machine et lancer `claude setup-token`. La commande ouvre le navigateur, puis affiche un jeton valable un an.
+2. Dans `.env`, mettre ce jeton dans `CLAUDE_CODE_OAUTH_TOKEN` et l'email de ton compte Hooklip dans `SUBSCRIPTION_EMAIL`.
+3. Relancer : `docker compose up -d`.
+
+Le worker et le web appellent alors Claude Code (`claude -p`) pour ce compte : pas de coût à l'appel, les analyses consomment ton quota d'abonnement, partagé avec ton usage habituel de Claude. Le budget mensuel ne s'applique plus ; les appels restent comptés dans Compte.
+
+Ce mode ne vaut que pour le compte `SUBSCRIPTION_EMAIL`. Les [conditions d'Anthropic](https://code.claude.com/docs/en/legal-and-compliance) interdisent à un service de faire passer ses utilisateurs par un abonnement, ou de leur proposer une connexion claude.ai : sur une instance ouverte au public, tous les autres comptes utilisent leur propre clé API.
+
 Ne change jamais `MASTER_KEY` après la première utilisation : les clés Claude et les jetons des réseaux, chiffrés avec elle, deviendraient illisibles. `SERVER_SALT` signe les liens de vidéo donnés à Instagram.
+
+## Mettre en ligne
+
+Sur un serveur Linux avec Docker et [Traefik](https://traefik.io) déjà lancé (réseau `host`, fournisseur Docker, résolveur Let's Encrypt nommé `letsencrypt`, entrée `websecure`), comme le modèle « Docker and Traefik » d'Hostinger. Prévoir 4 cœurs et 8 Go de RAM.
+
+1. Faire pointer le nom de domaine et son `www` (deux enregistrements `A`) vers l'adresse IP du serveur. `www` est redirigé vers le domaine.
+2. Copier le projet sur le serveur, puis `.env.example` en `.env`.
+3. Dans `.env` : `MASTER_KEY`, `SERVER_SALT` et `POSTGRES_PASSWORD` (trois valeurs aléatoires différentes, générées par `openssl rand -hex 32`), `DOMAIN=mon-domaine.fr` et `APP_URL=https://mon-domaine.fr`.
+4. Lancer :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Traefik obtient le certificat HTTPS tout seul à la première visite. En production, la base et le port 3000 ne sont pas exposés : seul Traefik joint le site. Le worker est limité à `WORKER_CPUS` cœurs (3 par défaut) pour que les rendus ne ralentissent pas les autres sites du serveur.
+
+Pour mettre à jour : copier la nouvelle version du code, puis relancer la même commande. Les migrations de la base s'appliquent au démarrage du web.
 
 ## Développer le web hors Docker
 

@@ -57,6 +57,7 @@ export function Moments(props: {
   state: Pick<SourceState, "analysis" | "candidates">;
   estimateUsd: number;
   budgetLeftUsd: number;
+  subscription: boolean;
   onSeek: (t: number) => void;
   onBatch: (candidateIds: string[]) => void;
   onPick: (candidate: SourceState["candidates"][number]) => void;
@@ -66,7 +67,7 @@ export function Moments(props: {
   const [message, setMessage] = useState<{ error?: string; ok?: string }>({});
   const [pending, setPending] = useState(false);
   const running = analysis.job?.status === "queued" || analysis.job?.status === "running";
-  const tooExpensive = claude && props.estimateUsd > props.budgetLeftUsd;
+  const tooExpensive = claude && !props.subscription && props.estimateUsd > props.budgetLeftUsd;
 
   return (
     <details className="card" open>
@@ -86,8 +87,10 @@ export function Moments(props: {
               <span>
                 Faire lire le transcript à Claude (titres et raisons pour chaque moment).
                 <span className="block text-xs text-zinc-500">
-                  Coût estimé avec ta clé : environ {props.estimateUsd.toFixed(2)} $. Budget restant ce mois-ci :{" "}
-                  {props.budgetLeftUsd.toFixed(2)} $. La transcription complète tourne sur le serveur : compte à peu près
+                  {props.subscription
+                    ? "Compris dans ton abonnement Claude : l'analyse consomme ton quota, sans facture en plus."
+                    : `Coût estimé avec ta clé : environ ${props.estimateUsd.toFixed(2)} $. Budget restant ce mois-ci : ${props.budgetLeftUsd.toFixed(2)} $.`}{" "}
+                  La transcription complète tourne sur le serveur : compte à peu près
                   la durée de la vidéo. Sans Claude, l&apos;analyse est gratuite et prend quelques secondes.
                 </span>
               </span>

@@ -12,7 +12,7 @@ const features = [
 ];
 
 const steps = [
-  ["Importe", "Un lien ou un fichier. ClipForge télécharge et prépare la vidéo."],
+  ["Importe", "Un lien ou un fichier. Hooklip télécharge et prépare la vidéo."],
   ["Repère", "Lance l'analyse. Les meilleurs moments arrivent classés, avec leur raison."],
   ["Monte", "Charge un moment dans l'éditeur, règle le cadrage et les sous-titres, lance le rendu."],
   ["Publie", "Choisis tes comptes, une date, et laisse le calendrier travailler."],
@@ -26,13 +26,13 @@ const withKey = [
 
 export default async function Landing() {
   const user = await getUser();
-  const primary = user ? { href: "/app", label: "Ouvrir ClipForge" } : { href: "/inscription", label: "Créer un compte gratuit" };
+  const primary = user ? { href: "/app", label: "Ouvrir Hooklip" } : { href: "/inscription", label: "Créer un compte gratuit" };
 
   return (
     <div className="landing min-h-screen overflow-x-clip">
       <header className="mx-auto flex max-w-6xl items-center gap-6 px-5 py-5">
         <Link href="/" className="text-xl font-bold">
-          Clip<span className="gradient-text">Forge</span>
+          Hook<span className="gradient-text">lip</span>
         </Link>
         <nav className="ml-auto hidden items-center gap-6 text-sm text-zinc-300 sm:flex">
           <a href="#fonctions" className="hover:text-white">
@@ -66,7 +66,7 @@ export default async function Landing() {
               De la VOD de six heures au <span className="gradient-text">clip qui tourne.</span>
             </h1>
             <p className="mt-5 max-w-xl text-lg text-zinc-300">
-              ClipForge trouve les meilleurs moments de tes lives, les recadre à la verticale, les sous-titre et les publie sur TikTok, Reels et
+              Hooklip trouve les meilleurs moments de tes lives, les recadre à la verticale, les sous-titre et les publie sur TikTok, Reels et
               Shorts. Tout au même endroit.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -80,7 +80,7 @@ export default async function Landing() {
             <p className="mt-5 text-sm text-zinc-500">Sans abonnement. Le montage et le rendu sont gratuits ; seule l&apos;analyse par Claude utilise ta propre clé.</p>
           </div>
 
-          {/* Maquette dessinée en CSS : un clip vertical et ce que ClipForge fait autour. */}
+          {/* Maquette dessinée en CSS : un clip vertical et ce que Hooklip fait autour. */}
           <div className="relative mx-auto w-full max-w-sm" aria-hidden="true">
             <div className="phone relative mx-auto w-56 overflow-hidden rounded-[2rem] sm:w-64">
               <div className="absolute inset-x-0 top-5 flex justify-center">
@@ -153,7 +153,7 @@ export default async function Landing() {
             <div className="glass p-7">
               <h2 className="text-2xl font-bold tracking-tight">Ce qui est gratuit, ce qui utilise ta clé</h2>
               <p className="mt-2 text-sm text-zinc-400">
-                ClipForge ne vend rien. La transcription, le montage et le rendu tournent sur le serveur. Seules deux fonctions appellent Claude,
+                Hooklip ne vend rien. La transcription, le montage et le rendu tournent sur le serveur. Seules deux fonctions appellent Claude,
                 avec ta propre clé API : c&apos;est Anthropic qui te facture, au centime près, et tu fixes un budget mensuel.
               </p>
               <h3 className="mt-6 text-sm font-semibold text-emerald-300">Gratuit, sans clé</h3>

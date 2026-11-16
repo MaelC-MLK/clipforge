@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from crypto import decrypt, encrypt
-from detect import (bucket_mean, build_candidates, clean_moments, combine, cost_usd, estimate_cost, format_slice,
+from detect import (bucket_mean, build_candidates, clean_moments, cli_answer, combine, cost_usd, estimate_cost, format_slice,
                     mean_score, normalize, pick_moments, slices, spread, why)
 from publish import MB, clip_bytes, public_token, tiktok_chunks
 from render import (build_ass, build_srt, crop_size, crop_x_expr, group_lines, keep_intervals, loud_peaks, remap_time,
@@ -328,6 +328,13 @@ class DetectTest(unittest.TestCase):
         # 1 h : 3 tranches de 25 min, 15 600 + 1 500 tokens en entrée, 9 000 en sortie.
         self.assertAlmostEqual(estimate_cost(3600, "claude-opus-5-5"), (17100 * 4 + 9000 * 20) / 1e6)
         self.assertGreater(estimate_cost(1, "claude-opus-5-5"), 0)
+
+    def test_cli_answer(self):
+        ok = '{"is_error": false, "structured_output": {"moments": []}, "usage": {"input_tokens": 10, "cache_read_input_tokens": 5, "output_tokens": 7}}'
+        self.assertEqual(cli_answer(ok), ({"moments": []}, 15, 7, None))
+        self.assertEqual(cli_answer('{"is_error": true, "result": "Invalid API key"}'), (None, 0, 0, "Invalid API key"))
+        self.assertEqual(cli_answer('{"result": "je décline"}'), (None, 0, 0, None))  # pas de sortie structurée : tranche sautée
+        self.assertEqual(cli_answer("")[3], "réponse illisible")
 
 
 class PublishTest(unittest.TestCase):

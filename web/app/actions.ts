@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSession, destroySession, requireUser } from "@/lib/auth";
-import { checkKey, generateClipMeta } from "@/lib/claude";
+import { checkKey, generateClipMeta, usesSubscription } from "@/lib/claude";
 import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
@@ -263,7 +263,7 @@ export async function analyzeSource(sourceId: string, claude: boolean): Promise<
   if (!source) return { error: "Source introuvable ou pas encore prête." };
   if (await db.job.findFirst({ where: { userId: user.id, sourceId: source.id, type: "analyze", status: { in: ["queued", "running"] } } }))
     return { error: "Une analyse est déjà en cours pour cette vidéo." };
-  if (claude) {
+  if (claude && !usesSubscription(user)) {
     if (!user.keyEncrypted) return { error: NO_KEY };
     const estimate = estimateAnalysisUsd(source.duration ?? 0);
     const left = user.monthlyBudgetUsd - (await monthSpentUsd(user.id));
@@ -286,12 +286,13 @@ export async function generateMeta(clipId: string, language: string): Promise<Fo
   const user = await requireUser();
   const clip = await db.clip.findFirst({ where: { id: String(clipId), userId: user.id, status: "rendered" } });
   if (!clip) return { error: "Clip introuvable ou pas encore rendu." };
-  if (!user.keyEncrypted) return { error: NO_KEY };
-  if ((await monthSpentUsd(user.id)) >= user.monthlyBudgetUsd) return { error: "Budget Claude du mois atteint. Augmente-le dans Compte." };
+  const subscription = usesSubscription(user);
+  if (!subscription && !user.keyEncrypted) return { error: NO_KEY };
+  if (!subscription && (await monthSpentUsd(user.id)) >= user.monthlyBudgetUsd) return { error: "Budget Claude du mois atteint. Augmente-le dans Compte." };
 
   const words = sanitizeWords(clip.words, clip.end - clip.start) ?? [];
   const result = await generateClipMeta(
-    decrypt(user.keyEncrypted),
+    subscription ? null : decrypt(user.keyEncrypted!),
     { title: clip.title, seconds: clip.end - clip.start, transcript: words.map((w) => w.w).join(" ") },
     String(language).slice(0, 30) || "français",
   );
@@ -302,7 +303,7 @@ export async function generateMeta(clipId: string, language: string): Promise<Fo
         model: result.model,
         inputTokens: result.inputTokens ?? 0,
         outputTokens: result.outputTokens ?? 0,
-        costUsd: costUsd(result.model, result.inputTokens ?? 0, result.outputTokens ?? 0),
+        costUsd: subscription ? 0 : costUsd(result.model, result.inputTokens ?? 0, result.outputTokens ?? 0),
       },
     });
   if ("error" in result) return { error: result.error };
@@ -432,14 +433,14 @@ export async function requestReset(_: FormState, form: FormData): Promise<FormSt
     const link = `${APP_URL}/reinitialiser/${token}`;
     const sent = await sendMail(
       email,
-      "ClipForge : choisir un nouveau mot de passe",
+      "Hooklip : choisir un nouveau mot de passe",
       `Bonjour,\n\nPour choisir un nouveau mot de passe, ouvre ce lien (valable une heure, utilisable une fois) :\n\n${link}\n\nSi tu n'as rien demandé, ignore ce message : ton mot de passe ne change pas.\n`,
     ).catch((e) => {
       console.error(e);
       return false;
     });
     // Sans serveur d'email, l'administrateur retrouve le lien dans le journal du serveur.
-    if (!sent) console.log(`[ClipForge] Lien de réinitialisation pour ${email} : ${link}`);
+    if (!sent) console.log(`[Hooklip] Lien de réinitialisation pour ${email} : ${link}`);
   }
   return {
     ok: mailConfigured()

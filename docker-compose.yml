@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: clipforge
-      POSTGRES_PASSWORD: clipforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipforge}
       POSTGRES_DB: clipforge
     ports:
       - "5432:5432" # pour lancer le web hors Docker en développement
@@ -18,7 +18,7 @@ services:
     build: ./web
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://clipforge:clipforge@postgres:5432/clipforge
+      DATABASE_URL: postgresql://clipforge:${POSTGRES_PASSWORD:-clipforge}@postgres:5432/clipforge
       DATA_DIR: /data
     ports:
       - "3000:3000"
@@ -36,7 +36,7 @@ services:
     build: ./worker
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://clipforge:clipforge@postgres:5432/clipforge
+      DATABASE_URL: postgresql://clipforge:${POSTGRES_PASSWORD:-clipforge}@postgres:5432/clipforge
       DATA_DIR: /data
       HF_HOME: /models # cache du modèle Whisper, téléchargé au premier rendu
     volumes:

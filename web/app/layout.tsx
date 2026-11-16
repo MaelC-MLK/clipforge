@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ClipForge",
+  title: "Hooklip",
   description: "Studio de clipping : de la VOD au clip vertical publié.",
 };
 

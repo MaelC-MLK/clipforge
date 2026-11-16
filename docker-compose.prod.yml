@@ -1,0 +1,24 @@
+# Mise en ligne derrière Traefik (déjà présent sur le serveur, avec un résolveur Let's Encrypt nommé « letsencrypt »).
+# docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  postgres:
+    ports: !reset [] # la base n'est jamais joignable depuis Internet
+    restart: unless-stopped
+
+  web:
+    ports: !reset [] # seul Traefik parle au site, en HTTPS
+    restart: unless-stopped
+    labels:
+      - traefik.enable=true
+      # www.DOMAIN doit aussi pointer vers le serveur : il est redirigé vers DOMAIN.
+      - traefik.http.routers.hooklip.rule=Host(`${DOMAIN:?DOMAIN manquant dans .env}`) || Host(`www.${DOMAIN}`)
+      - traefik.http.routers.hooklip.entrypoints=websecure
+      - traefik.http.routers.hooklip.tls.certresolver=letsencrypt
+      - traefik.http.routers.hooklip.middlewares=hooklip-www
+      - traefik.http.middlewares.hooklip-www.redirectregex.regex=^https://www\.(.*)
+      - traefik.http.middlewares.hooklip-www.redirectregex.replacement=https://$${1}
+      - traefik.http.middlewares.hooklip-www.redirectregex.permanent=true
+      - traefik.http.services.hooklip.loadbalancer.server.port=3000
+
+  worker:
+    cpus: ${WORKER_CPUS:-3} # laisse de la marge aux autres sites du serveur pendant les rendus

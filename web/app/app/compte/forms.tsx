@@ -32,7 +32,7 @@ export function KeyForm({ hasKey }: { hasKey: boolean }) {
             type="button"
             className="btn-ghost"
             onClick={async () => {
-              if (!confirm("Retirer la clé de ClipForge ? L'analyse par Claude et les textes de publication seront désactivés.")) return;
+              if (!confirm("Retirer la clé de Hooklip ? L'analyse par Claude et les textes de publication seront désactivés.")) return;
               await removeKey();
               router.refresh();
             }}
@@ -54,7 +54,7 @@ export function AccountForm({ budget, purgeDays }: { budget: number; purgeDays: 
           Budget Claude mensuel ($)
         </label>
         <input id="budget" name="budget" type="number" min="0" step="1" required defaultValue={budget} className="input" />
-        <p className="mt-1 text-xs text-zinc-500">Au-delà, ClipForge refuse de lancer de nouveaux appels à Claude jusqu&apos;au mois suivant.</p>
+        <p className="mt-1 text-xs text-zinc-500">Au-delà, Hooklip refuse de lancer de nouveaux appels à Claude jusqu&apos;au mois suivant.</p>
       </div>
       <div>
         <label className="label" htmlFor="purge">

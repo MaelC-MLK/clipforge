@@ -15,10 +15,10 @@ export function KeyGuide() {
       ce que tu consommes.
     </>,
     <>
-      Ouvre {link(`${CONSOLE}/settings/keys`, "Clés API")}, clique sur « Create Key », donne-lui un nom (ClipForge, par exemple) et copie la clé.
+      Ouvre {link(`${CONSOLE}/settings/keys`, "Clés API")}, clique sur « Create Key », donne-lui un nom (Hooklip, par exemple) et copie la clé.
       Elle commence par <code className="rounded bg-white/10 px-1">sk-ant-</code> et n&apos;est affichée qu&apos;une fois.
     </>,
-    <>Colle-la dans ClipForge, page Compte. Elle est vérifiée, chiffrée, et ne revient jamais dans ton navigateur.</>,
+    <>Colle-la dans Hooklip, page Compte. Elle est vérifiée, chiffrée, et ne revient jamais dans ton navigateur.</>,
   ];
   return (
     <div>
@@ -32,7 +32,7 @@ export function KeyGuide() {
       </ol>
       <p className="mt-4 text-xs text-zinc-500">
         Conseil : fixe un plafond de dépense dans {link(`${CONSOLE}/settings/limits`, "Limites")} côté Anthropic, en plus du budget mensuel que tu
-        règles dans ClipForge. Pour arrêter tout accès, supprime la clé dans la console.
+        règles dans Hooklip. Pour arrêter tout accès, supprime la clé dans la console.
       </p>
     </div>
   );

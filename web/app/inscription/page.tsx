@@ -9,7 +9,7 @@ export default async function SignupPage() {
     <main className="landing flex min-h-screen items-center justify-center px-4 py-16">
       <div className="glass w-full max-w-md p-8">
         <Link href="/" className="text-lg font-bold">
-          Clip<span className="gradient-text">Forge</span>
+          Hook<span className="gradient-text">lip</span>
         </Link>
         <h1 className="mt-6 text-2xl font-bold">Créer un compte</h1>
         <p className="mt-1 text-sm text-zinc-400">
