@@ -17,17 +17,25 @@ def crop_size(w: int, h: int, out_h: int = OUT_H) -> tuple[int, int]:
     return cw, ch
 
 
-def smooth(points: list[tuple[float, float | None]], dead: float = 0.08) -> list[tuple[float, float]]:
+def smooth(points: list[tuple[float, float | None]], dead: float = 0.08, cuts: list[float] = ()) -> list[tuple[float, float]]:
     """Stabilise le suivi du visage.
 
     points : (temps, centre horizontal du visage entre 0 et 1, ou None si aucun visage).
     Le cadre ne bouge que si le visage s'écarte de plus de `dead` : pas de tremblement.
+    cuts : changements de plan. Le cadre y saute d'un coup au lieu de glisser d'un plan à l'autre.
     Aucun visage détecté du tout : cadre centré.
     """
     held = next((x for _, x in points if x is not None), 0.5)
+    pending = sorted(cuts)
     out = []
     for t, x in points:
-        if x is not None and abs(x - held) > dead:
+        cut = None
+        while pending and pending[0] <= t:
+            cut = pending.pop(0)
+        if cut is not None and x is not None and x != held:
+            out += [(max(cut - 0.01, 0), held), (cut, x)]  # deux points collés : un saut net
+            held = x
+        elif x is not None and abs(x - held) > dead:
             held = x
         out.append((t, held))
     return out
@@ -232,7 +240,7 @@ def render_cmd(
     src: Path, dst: Path, start: float, duration: float, size: tuple[int, int], fps: str, edit: dict,
     points: list[tuple[float, float]], *, ass: str | None = None, keep: list[tuple[float, float]] | None = None,
     zooms: list[float] = (), voice: str | None = None, music: str | None = None, stack: str | None = None,
-    stack_start: float = 0, source_audio: bool = True,
+    stack_start: float = 0, source_audio: bool = True, audio: str | None = None,
 ) -> list[str]:
     """Rendu final 1080x1920 H.264/AAC.
 
@@ -240,6 +248,7 @@ def render_cmd(
     ass, voice : noms de fichiers relatifs au dossier d'exécution. voice remplace le son d'origine.
     keep : parties gardées quand on coupe les silences. zooms : instants des zooms.
     stack : vidéo secondaire empilée avec la principale, lue à partir de stack_start. music : fond sonore, baissé quand ça parle.
+    audio : son qui remplace celui de la source, calé sur le début du clip (voix isolée).
     """
     w, h = size
     out = sum(b - a for a, b in keep) if keep else duration
@@ -261,6 +270,12 @@ def render_cmd(
 
     inputs: list[str] = []
     n = 1  # numéro de la prochaine entrée FFmpeg (0 = la source)
+    hidden = []
+    zone = edit.get("hide") or {}
+    if zone.get("on"):
+        hw, hh = max(2, even(zone["w"] * w)), max(2, even(zone["h"] * h))
+        hx, hy = min(int(zone["x"] * w), w - hw), min(int(zone["y"] * h), h - hh)
+        hidden = ["[0:v]split[h0][h1]", f"[h1]crop={hw}:{hh}:{hx}:{hy},gblur=sigma=30:steps=2[hb]", f"[h0][hb]overlay={hx}:{hy}[src]"]
     if split:
         f = edit.get("facecam") or {"x": 0, "y": 0, "w": 0.3, "h": 0.3}
         fw, fh = max(2, even(f["w"] * w)), max(2, even(f["h"] * h))
@@ -273,6 +288,8 @@ def render_cmd(
         n += 1
     else:
         graph = [f"[0:v]{main}[lay]"]
+    if hidden:
+        graph = hidden + [g.replace("[0:v]", "[src]", 1) for g in graph]
 
     chain = []
     if zooms:
@@ -296,8 +313,15 @@ def render_cmd(
         inputs += ["-i", voice]
         base = f"[{n}:a]anull"
         n += 1
-    elif source_audio:
-        base = "[0:a]" + (f"aselect='{select_expr(keep)}',asetpts=N/SR/TB" if keep else "anull")
+    elif audio or source_audio:
+        track = "[0:a]"
+        if audio:
+            inputs += ["-i", audio]
+            track = f"[{n}:a]"
+            n += 1
+        base = track + (f"aselect='{select_expr(keep)}',asetpts=N/SR/TB" if keep else "anull")
+        if edit.get("denoise"):
+            base += ",highpass=f=80,afftdn=nf=-25"  # bruit de fond (souffle, ventilateur) atténué
     sound = []
     if music:
         inputs += ["-stream_loop", "-1", "-i", music]  # musique plus courte que le clip : elle boucle

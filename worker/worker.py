@@ -150,7 +150,8 @@ def ingest(conn, job):
 
         options = {
             "outtmpl": str(folder / "source.%(ext)s"),
-            "format": "bv*[height<=1080]+ba/b[height<=1080]/b",
+            # 1440p quand il existe : un cadre vertical pris dans du 16:9 garde plus de détails une fois agrandi en 1080x1920.
+            "format": "bv*[height<=1440]+ba/b[height<=1440]/b",
             "merge_output_format": "mp4",
             "noplaylist": True,
             "quiet": True,
@@ -269,28 +270,81 @@ def voice_track(words: list[dict], language: str, duration: float, folder: Path)
     return "voice.wav"
 
 
-def track_face(video: Path, start: float, duration: float, on_progress) -> list[tuple[float, float | None]]:
-    """Centre horizontal du plus grand visage (0 à 1), une mesure par seconde."""
+def separate_voice(source: Path, start: float, duration: float, dst: Path) -> bool:
+    """Garde seulement la voix du passage (Demucs htdemucs) : musique et sons du jeu retirés. False si pas de son.
+
+    Sur le processeur, compter environ deux minutes de calcul par minute de clip.
+    """
+    import numpy as np
+    import torch
+    from demucs.apply import apply_model
+    from demucs.pretrained import get_model
+
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
+         "-vn", "-f", "f32le", "-ac", "2", "-ar", "44100", "-"],
+        capture_output=True,
+    ).stdout
+    if len(raw) < 44100 * 8:  # moins de 0,1 s de son : pas de piste audio
+        return False
+    torch.hub.set_dir(str(Path(os.environ.get("HF_HOME", "/models")) / "torch"))  # poids gardés entre deux rendus
+    torch.set_num_threads(max(1, (os.cpu_count() or 2) - 1))
+    model = get_model("htdemucs")
+    model.eval()
+    wav = torch.from_numpy(np.frombuffer(raw, dtype=np.float32).reshape(-1, 2).T.copy())
+    ref = wav.mean(0)
+    mean, std = ref.mean(), ref.std() + 1e-8
+    with torch.no_grad():
+        stems = apply_model(model, ((wav - mean) / std)[None], device="cpu", progress=False)[0]
+    vocals = stems[model.sources.index("vocals")] * std + mean
+    pcm = (vocals.clamp(-1, 1).T.numpy() * 32767).astype(np.int16)
+    with wave.open(str(dst), "wb") as f:
+        f.setnchannels(2)
+        f.setsampwidth(2)
+        f.setframerate(44100)
+        f.writeframes(pcm.tobytes())
+    return True
+
+
+YUNET = Path(os.environ.get("YUNET_MODEL", "/opt/models/yunet.onnx"))
+
+
+def scene_cuts(video: Path, start: float, duration: float) -> list[float]:
+    """Changements de plan dans le clip (PySceneDetect), en secondes depuis son début."""
+    from scenedetect import ContentDetector, detect
+
+    scenes = detect(str(video), ContentDetector(), start_time=start, end_time=start + duration)
+    return [round(s.get_seconds() - start, 2) for s, _ in scenes[1:]]
+
+
+def track_face(video: Path, start: float, duration: float, on_progress, cuts: list[float] = ()) -> list[tuple[float, float | None]]:
+    """Centre horizontal du plus grand visage (0 à 1) : une mesure par seconde, plus une juste après chaque changement de plan."""
     import cv2
 
-    # shortcut: détecteur Haar fourni avec OpenCV (visages de face). Passer à YuNet ou
-    # mediapipe si le suivi décroche sur des visages de profil ou très petits.
-    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    # YuNet (OpenCV) : trouve aussi les petits visages et ceux de trois quarts, comme une facecam dans un coin.
+    # Haar en secours, si le modèle n'est pas installé (tests hors Docker).
+    yunet = cv2.FaceDetectorYN.create(str(YUNET), "", (320, 320), 0.6) if YUNET.is_file() else None
+    haar = None if yunet else cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     capture = cv2.VideoCapture(str(video))
+    times = sorted({*(float(t) for t in range(int(duration) + 1)), *(c + 0.1 for c in cuts if c + 0.1 < duration)})
     points = []
-    t = 0.0
-    while t <= duration:
+    for t in times:
         capture.set(cv2.CAP_PROP_POS_MSEC, (start + t) * 1000)
         ok, frame = capture.read()
         center = None
         if ok:
-            faces = detector.detectMultiScale(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 1.1, 5, minSize=(40, 40))
+            width = frame.shape[1]
+            if yunet:
+                yunet.setInputSize((width, frame.shape[0]))
+                _, faces = yunet.detect(frame)
+                faces = [] if faces is None else [f[:4] for f in faces]
+            else:
+                faces = haar.detectMultiScale(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 1.1, 5, minSize=(40, 40))
             if len(faces):
                 x, _, w, _ = max(faces, key=lambda f: f[2] * f[3])
-                center = float(x + w / 2) / frame.shape[1]
+                center = float(x + w / 2) / width
         points.append((t, center))
-        on_progress(t / duration)
-        t += 1.0
+        on_progress(t / max(duration, 1))
     capture.release()
     return points
 
@@ -311,20 +365,29 @@ def render(conn, job):
     folder.mkdir(parents=True, exist_ok=True)
     edit = clip["edit"]
 
+    # Voix isolée : sert au son du clip et à la transcription (plus juste sans la musique du jeu).
+    voice_only = None
+    if edit.get("voiceOnly"):
+        progress(2)
+        if separate_voice(source, start, duration, folder / "voice_only.wav"):
+            voice_only = folder / "voice_only.wav"
+        progress(20)
+    base = 20 if voice_only else 0
+
     # Mots : ceux corrigés par l'utilisateur, sinon une transcription si un réglage en a besoin.
     custom = bool(edit.get("customWords")) and clip["words"] is not None
     words, language, zooms = (clip["words"], clip["language"] or "fr", []) if custom else ([], "fr", [])
     need_words = not custom and (edit.get("subtitles") or edit.get("voice") or edit.get("cutSilences"))
     if need_words or edit.get("zoomPunch"):
         audio = folder / "audio.wav"
+        cut = ["-i", str(voice_only)] if voice_only else ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
         extracted = subprocess.run(
-            ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
-             "-vn", "-ac", "1", "-ar", "16000", "-loglevel", "error", str(audio)],
+            ["ffmpeg", "-y", *cut, "-vn", "-ac", "1", "-ar", "16000", "-loglevel", "error", str(audio)],
             capture_output=True,
         )
         if extracted.returncode == 0:  # sinon : pas de piste audio
             if need_words:
-                words, language = transcribe(audio, lambda f: progress(f * 40))
+                words, language = transcribe(audio, lambda f: progress(base + f * (40 - base)))
             if edit.get("zoomPunch"):
                 zooms = loud_peaks(audio_levels(audio, 0.25), 0.25, max(1, int(duration // 10)))
         audio.unlink(missing_ok=True)
@@ -343,7 +406,13 @@ def render(conn, job):
 
     points = [(0.0, 0.5)]
     if edit.get("crop") == "face":
-        points = smooth(track_face(DATA / clip["proxyPath"], start, duration, lambda f: progress(40 + f * 15)))
+        proxy = DATA / clip["proxyPath"]
+        try:
+            cuts = scene_cuts(proxy, start, duration)
+        except Exception:  # le suivi marche aussi sans : le cadre glisse au lieu de sauter
+            traceback.print_exc()
+            cuts = []
+        points = smooth(track_face(proxy, start, duration, lambda f: progress(40 + f * 15), cuts), cuts=cuts)
     elif edit.get("crop") == "manual" and edit.get("keyframes"):
         points = sorted((k["t"], k["x"]) for k in edit["keyframes"])
     progress(55)
@@ -382,10 +451,11 @@ def render(conn, job):
     cmd = render_cmd(source, output, start, duration, (w, h), fps, edit, points,
                      ass="subs.ass" if has_ass else None, keep=keep, zooms=zooms, voice=voice,
                      music=str(music) if music.is_file() else None, stack=stack, stack_start=stack_start,
-                     source_audio=has_audio)
+                     source_audio=has_audio, audio=voice_only.name if voice_only else None)
     # cwd = dossier du clip : le filtre `ass` reçoit un simple nom de fichier, sans caractères à échapper.
     run_ffmpeg(cmd, out_duration, progress, 55, 100, cwd=folder)
     (folder / "voice.wav").unlink(missing_ok=True)
+    (folder / "voice_only.wav").unlink(missing_ok=True)
     subprocess.run(thumb_cmd("clip.mp4", "thumb.jpg", out_duration / 3), cwd=folder, capture_output=True)
 
     updated = conn.execute(

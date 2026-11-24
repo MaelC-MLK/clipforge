@@ -133,7 +133,25 @@ function Preview(props: { video: RefObject<HTMLVideoElement | null>; edit: Edit;
         const cw = Math.min(r.w, (r.h * PW) / dh);
         const ch = (cw * dh) / PW;
         const cx = Math.min(Math.max(r.x + centerX * r.w - cw / 2, r.x), r.x + r.w - cw);
-        ctx.drawImage(img, cx, r.y + (r.h - ch) / 2, cw, ch, 0, dy, PW, dh);
+        const cy = r.y + (r.h - ch) / 2;
+        ctx.drawImage(img, cx, cy, cw, ch, 0, dy, PW, dh);
+        // Zone masquée : la même portion de la source, floutée, là où elle tombe dans le cadre.
+        const z = edit.hide;
+        if (img === v && z.on) {
+          const zx = z.x * whole.w, zy = z.y * whole.h, zw = z.w * whole.w, zh = z.h * whole.h;
+          const k = PW / cw;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(0, dy, PW, dh);
+          ctx.clip();
+          ctx.filter = "blur(10px)";
+          ctx.drawImage(img, zx, zy, zw, zh, (zx - cx) * k, dy + (zy - cy) * k, zw * k, zh * k);
+          ctx.filter = "none";
+          ctx.setLineDash([6, 4]);
+          ctx.strokeStyle = "rgba(167,139,250,0.9)";
+          ctx.strokeRect((zx - cx) * k, dy + (zy - cy) * k, zw * k, zh * k);
+          ctx.restore();
+        }
       };
       const whole = { x: 0, y: 0, w: v.videoWidth, h: v.videoHeight };
       const topH = Math.round(PH * edit.ratio);
@@ -555,6 +573,8 @@ export function Editor({
           <Check label="Voix de synthèse (redit le texte et remplace tout le son d'origine)" checked={edit.voice} onChange={(v) => set("voice", v)} />
           <Check label="Couper les silences" checked={edit.cutSilences} onChange={(v) => set("cutSilences", v)} />
           <Check label="Normaliser le volume (niveau standard des réseaux)" checked={edit.loudnorm} onChange={(v) => set("loudnorm", v)} />
+          <Check label="Garder seulement la voix : retire la musique et les sons du jeu (rendu plus long)" checked={edit.voiceOnly} onChange={(v) => set("voiceOnly", v)} />
+          <Check label="Réduire le bruit de fond (souffle, ventilateur)" checked={edit.denoise} onChange={(v) => set("denoise", v)} />
           <div>
             <label className="label" htmlFor="music">
               Musique de fond
@@ -614,6 +634,16 @@ export function Editor({
             <input id="watermark" value={edit.watermark} onChange={(e) => set("watermark", e.target.value)} maxLength={40} placeholder="@tachaine" className="input" />
           </div>
           <Check label="Barre de progression en bas" checked={edit.progressBar} onChange={(v) => set("progressBar", v)} />
+          <Check label="Flouter une zone (filigrane, logo, HUD du jeu)" checked={edit.hide.on} onChange={(on) => set("hide", { ...edit.hide, on })} />
+          {edit.hide.on && (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <p className="col-span-2 text-xs text-zinc-500">Zone dans la vidéo d&apos;origine, entourée en violet dans l&apos;aperçu.</p>
+              <Slider id="hx" label="Bord gauche" min={0} max={1 - edit.hide.w} step={0.01} value={edit.hide.x} onChange={(x) => set("hide", { ...edit.hide, x })} />
+              <Slider id="hy" label="Bord haut" min={0} max={1 - edit.hide.h} step={0.01} value={edit.hide.y} onChange={(y) => set("hide", { ...edit.hide, y })} />
+              <Slider id="hw" label="Largeur" min={0.02} max={1} step={0.01} value={edit.hide.w} onChange={(w) => set("hide", { ...edit.hide, w, x: Math.min(edit.hide.x, 1 - w) })} />
+              <Slider id="hh" label="Hauteur" min={0.02} max={1} step={0.01} value={edit.hide.h} onChange={(h) => set("hide", { ...edit.hide, h, y: Math.min(edit.hide.y, 1 - h) })} />
+            </div>
+          )}
           <Check label="Zoom sur les pics sonores (cris, rires)" checked={edit.zoomPunch} onChange={(v) => set("zoomPunch", v)} />
         </Section>
 

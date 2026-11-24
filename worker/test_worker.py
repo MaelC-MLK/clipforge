@@ -403,5 +403,42 @@ class HookTest(unittest.TestCase):
         self.assertIn("Dialogue: 2,0:00:00.00,0:00:20.00,Hook", build_ass([], hook="Titre", duration=20, hook_full=True))
 
 
+class SceneCutTest(unittest.TestCase):
+    def test_jump_at_cut(self):
+        points = [(0.0, 0.2), (1.0, 0.2), (2.0, 0.2), (2.6, 0.8), (3.0, 0.8)]
+        # Sans coupure, le cadre glisse entre 2 s et 2,6 s ; avec une coupure à 2,5 s, il saute.
+        self.assertEqual(smooth(points)[3], (2.6, 0.8))
+        out = smooth(points, cuts=[2.5])
+        self.assertIn((2.49, 0.2), out)
+        self.assertIn((2.5, 0.8), out)
+        self.assertEqual(out[-1], (3.0, 0.8))
+        # Petit écart au changement de plan : on suit quand même le nouveau visage.
+        self.assertEqual(smooth([(0.0, 0.5), (1.0, 0.52)], cuts=[0.9])[-1], (1.0, 0.52))
+
+
+class CleanAudioTest(unittest.TestCase):
+    def test_isolated_voice_replaces_source(self):
+        cmd = render_cmd(Path("/s.mp4"), Path("/o.mp4"), 10, 20, (1920, 1080), "30", {"denoise": True}, [(0.0, 0.5)], audio="voice_only.wav")
+        graph = cmd[cmd.index("-filter_complex") + 1]
+        self.assertIn("voice_only.wav", cmd)
+        self.assertIn("[1:a]anull,highpass=f=80,afftdn=nf=-25", graph)
+        self.assertNotIn("[0:a]", graph)
+        # Sans voix isolée : le son de la source, sans débruitage par défaut.
+        cmd = render_cmd(Path("/s.mp4"), Path("/o.mp4"), 10, 20, (1920, 1080), "30", {}, [(0.0, 0.5)])
+        self.assertIn("[0:a]anull[mix]", cmd[cmd.index("-filter_complex") + 1])
+
+
+class HideZoneTest(unittest.TestCase):
+    def test_blur_before_crop(self):
+        edit = {"hide": {"on": True, "x": 0.75, "y": 0.0, "w": 0.25, "h": 0.1}}
+        graph = render_cmd(Path("/s.mp4"), Path("/o.mp4"), 0, 10, (1920, 1080), "30", edit, [(0.0, 0.5)])
+        graph = graph[graph.index("-filter_complex") + 1].split(";")
+        self.assertEqual(graph[:3], ["[0:v]split[h0][h1]", "[h1]crop=480:108:1440:0,gblur=sigma=30:steps=2[hb]", "[h0][hb]overlay=1440:0[src]"])
+        self.assertTrue(graph[3].startswith("[src]crop="))
+        # Mode split : la facecam et le jeu viennent tous deux de l'image floutée.
+        split = render_cmd(Path("/s.mp4"), Path("/o.mp4"), 0, 10, (1920, 1080), "30", {**edit, "crop": "split"}, [(0.0, 0.5)])
+        self.assertIn("[src]split[m0][c0]", split[split.index("-filter_complex") + 1])
+
+
 if __name__ == "__main__":
     unittest.main()

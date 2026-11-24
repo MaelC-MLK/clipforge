@@ -1,8 +1,10 @@
 psycopg[binary]==3.2.*
-yt-dlp[default]
+yt-dlp[default,curl-cffi]  # curl-cffi : certains sites (Kick) exigent d'imiter un navigateur
 cryptography
 faster-whisper
 opencv-python-headless<5  # la v5 n'inclut plus le détecteur Haar utilisé par track_face
 piper-tts
 anthropic
+demucs  # voix isolée ; torch est installé à part, version processeur (voir Dockerfile)
+scenedetect  # changements de plan, pour le suivi du visage
 requests

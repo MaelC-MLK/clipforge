@@ -124,6 +124,8 @@ export function FastForm({ sourceId, title: initialTitle, duration, music }: { s
           )}
           <Toggle label="Barre de progression" checked={edit.progressBar} onChange={(v) => set("progressBar", v)} />
           <Toggle label="Volume normalisé" checked={edit.loudnorm} onChange={(v) => set("loudnorm", v)} />
+          <Toggle label="Garder seulement la voix (retire la musique du stream)" checked={edit.voiceOnly} onChange={(v) => set("voiceOnly", v)} />
+          <Toggle label="Réduire le bruit de fond" checked={edit.denoise} onChange={(v) => set("denoise", v)} />
         </div>
 
         {music.length > 0 && (

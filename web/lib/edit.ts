@@ -12,6 +12,7 @@ export type Edit = {
   crop: (typeof CROPS)[number];
   keyframes: { t: number; x: number }[]; // cadrage manuel : centre horizontal (0 à 1) à l'instant t du clip
   facecam: { x: number; y: number; w: number; h: number }; // mode split : zone de la facecam, en fractions de l'image
+  hide: { on: boolean; x: number; y: number; w: number; h: number }; // zone floutée de la source (filigrane, HUD), en fractions de l'image
   ratio: number; // part de la hauteur donnée à la partie du haut (split et vidéo secondaire)
   stackSourceId: string; // vidéo secondaire de la bibliothèque, "" = aucune
   stackPosition: "top" | "bottom";
@@ -35,6 +36,8 @@ export type Edit = {
   zoomPunch: boolean;
   cutSilences: boolean;
   loudnorm: boolean;
+  voiceOnly: boolean; // garde seulement la voix (Demucs) : musique et sons du jeu retirés
+  denoise: boolean; // atténue le bruit de fond
   customWords: boolean; // les mots ont été corrigés à la main : le worker ne retranscrit pas
 };
 
@@ -43,6 +46,7 @@ export const DEFAULT_EDIT: Edit = {
   keyframes: [],
   facecam: { x: 0, y: 0, w: 0.3, h: 0.3 },
   ratio: 0.4,
+  hide: { on: false, x: 0.75, y: 0.03, w: 0.2, h: 0.1 },
   stackSourceId: "",
   stackPosition: "bottom",
   subtitles: true,
@@ -58,6 +62,8 @@ export const DEFAULT_EDIT: Edit = {
   zoomPunch: false,
   cutSilences: false,
   loudnorm: true,
+  voiceOnly: false,
+  denoise: false,
   customWords: false,
 };
 
@@ -76,6 +82,9 @@ export function sanitizeEdit(input: unknown): Edit {
   const d = DEFAULT_EDIT;
   const style = obj(i.subStyle);
   const cam = obj(i.facecam);
+  const hide = obj(i.hide);
+  const hw = num(hide.w, 0.02, 1, d.hide.w);
+  const hh = num(hide.h, 0.02, 1, d.hide.h);
   const w = num(cam.w, 0.05, 1, d.facecam.w);
   const h = num(cam.h, 0.05, 1, d.facecam.h);
   return {
@@ -85,6 +94,7 @@ export function sanitizeEdit(input: unknown): Edit {
       .map((k) => ({ t: num(obj(k).t, 0, 3600, 0), x: num(obj(k).x, 0, 1, 0.5) }))
       .sort((a, b) => a.t - b.t),
     facecam: { x: num(cam.x, 0, 1 - w, 0), y: num(cam.y, 0, 1 - h, 0), w, h },
+    hide: { on: Boolean(hide.on), x: num(hide.x, 0, 1 - hw, d.hide.x), y: num(hide.y, 0, 1 - hh, d.hide.y), w: hw, h: hh },
     ratio: num(i.ratio, 0.2, 0.8, d.ratio),
     stackSourceId: text(i.stackSourceId, 40),
     stackPosition: pick(i.stackPosition, ["top", "bottom"] as const, d.stackPosition),
@@ -108,6 +118,8 @@ export function sanitizeEdit(input: unknown): Edit {
     zoomPunch: Boolean(i.zoomPunch),
     cutSilences: Boolean(i.cutSilences),
     loudnorm: Boolean(i.loudnorm),
+    voiceOnly: Boolean(i.voiceOnly),
+    denoise: Boolean(i.denoise),
     customWords: Boolean(i.customWords),
   };
 }
