@@ -1,7 +1,9 @@
 """Lancer avec : docker compose run --rm --no-deps worker python -m unittest -v"""
 
+import os
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from crypto import decrypt, encrypt
 from detect import (bucket_mean, build_candidates, clean_moments, cli_answer, combine, cost_usd, estimate_cost, format_slice,
@@ -9,7 +11,8 @@ from detect import (bucket_mean, build_candidates, clean_moments, cli_answer, co
 from publish import MB, clip_bytes, public_token, tiktok_chunks
 from render import (build_ass, build_srt, crop_size, crop_x_expr, group_lines, keep_intervals, loud_peaks, remap_time,
                     remap_words, render_cmd, select_expr, smooth, speech_segments, voice_cmd)
-from worker import Fatal, check_duration, proxy_cmd
+import worker
+from worker import Fatal, check_duration, niche_clips, proxy_cmd
 
 MASTER_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 # Même vecteur que web/lib/crypto.test.ts.
@@ -175,6 +178,11 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(graph[0].endswith("scale=1080:960,setsar=1[main]"))
         self.assertIn("[2:a]volume=0.3[m]", graph)  # la musique vient après la vidéo secondaire
         self.assertEqual(graph_of(cmd_for({"stackPosition": "top"}, stack="/x.mp4"))[2], "[sec][main]vstack=shortest=1[lay]")
+        # Une partie suivante reprend la vidéo secondaire plus loin, toujours en boucle.
+        cmd = cmd_for({}, stack="/x.mp4", stack_start=61)
+        self.assertEqual(cmd[cmd.index("/x.mp4") - 5:cmd.index("/x.mp4")], ["-stream_loop", "-1", "-ss", "61.00", "-i"])
+        cmd = cmd_for({}, stack="/x.mp4")
+        self.assertEqual(cmd[cmd.index("/x.mp4") - 3:cmd.index("/x.mp4")], ["-stream_loop", "-1", "-i"])
 
     def test_silences_zoom_et_barre(self):
         keep = [(0.0, 4.0), (10.0, 16.0)]
@@ -360,6 +368,39 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(public_token("abc"), "afac5cf79658b3eed0b8718e713ce385d6618691b1ac950b6fbf07ae62395484")
         self.assertNotEqual(public_token("abc"), public_token("abd"))
         self.assertEqual(len(public_token("abc")), 64)
+
+
+class RecommendTest(unittest.TestCase):
+    def test_kick(self):
+        data = {"clips": [
+            {"id": "clip_1", "title": "Dingue", "channel": {"slug": "xqc", "username": "xQc"}, "view_count": 900, "duration": 42,
+             "thumbnail_url": "https://t/1.webp", "created_at": "2026-11-17T00:27:26.628411Z", "privacy": "public"},
+            {"id": "clip_2", "title": "Privé", "channel": {"slug": "a", "username": "a"}, "views": 5, "duration": 10,
+             "created_at": "2026-11-17T00:00:00Z", "privacy": "private"},
+        ]}
+        with mock.patch.object(worker, "http_json", return_value=data) as call:
+            clips = niche_clips({"platform": "kick", "categoryId": "just-chatting", "period": "day", "language": ""})
+        self.assertEqual(call.call_args.args[0], "https://kick.com/api/v2/categories/just-chatting/clips")
+        self.assertEqual(len(clips), 1)
+        self.assertEqual(clips[0]["url"], "https://kick.com/xqc/clips/clip_1")
+        self.assertEqual(clips[0]["views"], 900)
+        self.assertIsNone(clips[0]["clipCreatedAt"].tzinfo)
+
+    def test_twitch_language(self):
+        clip = {"id": "A", "url": "u", "title": "t", "broadcaster_name": "b", "view_count": 1, "duration": 30, "thumbnail_url": "",
+                "created_at": "2026-11-17T10:00:00Z"}
+        rows = [{**clip, "language": "fr"}, {**clip, "id": "B", "language": "en"}]
+        with mock.patch.dict(os.environ, {"TWITCH_CLIENT_ID": "x", "TWITCH_CLIENT_SECRET": "y"}), mock.patch.object(worker, "helix", return_value=rows):
+            clips = niche_clips({"platform": "twitch", "categoryId": "509658", "period": "week", "language": "fr"})
+        self.assertEqual([c["externalId"] for c in clips], ["A"])
+        with mock.patch.dict(os.environ, {"TWITCH_CLIENT_ID": "", "TWITCH_CLIENT_SECRET": ""}), self.assertRaises(Fatal):
+            niche_clips({"platform": "twitch", "categoryId": "1", "period": "day", "language": ""})
+
+
+class HookTest(unittest.TestCase):
+    def test_full_length(self):
+        self.assertIn("Dialogue: 2,0:00:00.00,0:00:03.00,Hook", build_ass([], hook="Titre", duration=20))
+        self.assertIn("Dialogue: 2,0:00:00.00,0:00:20.00,Hook", build_ass([], hook="Titre", duration=20, hook_full=True))
 
 
 if __name__ == "__main__":

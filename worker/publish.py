@@ -64,8 +64,9 @@ def refresh(provider: str, access_token: str, refresh_token: str | None) -> tupl
     return data["access_token"], None, data.get("expires_in", 5184000)
 
 
-def youtube(token: str, file: Path, title: str, description: str):
-    """Envoi en deux temps : ouverture d'une session, puis le fichier. Une vidéo verticale courte devient un Short."""
+def youtube(token: str, file: Path, title: str, description: str, cover: Path | None = None, kids: bool = False):
+    """Envoi en deux temps : ouverture d'une session, puis le fichier. Une vidéo verticale courte devient un Short.
+    `cover` : miniature choisie par l'utilisateur, envoyée ensuite ; son refus ne fait pas échouer la publication."""
     size = file.stat().st_size
     session = requests.post(
         api("www.googleapis.com", "/upload/youtube/v3/videos"), timeout=TIMEOUT,
@@ -74,7 +75,7 @@ def youtube(token: str, file: Path, title: str, description: str):
         json={
             # Limites YouTube : titre de 100 caractères, description de 5 000 octets, ni < ni >.
             "snippet": {"title": clean(title)[:100] or "Clip", "description": clip_bytes(clean(description), 5000), "categoryId": "22"},
-            "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
+            "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": kids},
         },
     )
     if session.status_code == 403 and "quota" in session.text.lower():
@@ -84,7 +85,13 @@ def youtube(token: str, file: Path, title: str, description: str):
         done = check(requests.put(upload_url, data=f, timeout=1800, headers={
             "Authorization": f"Bearer {token}", "Content-Length": str(size), "Content-Type": "video/mp4"}), "YouTube")
     video = done.json()["id"]
-    return "published", f"https://www.youtube.com/shorts/{video}", None, video
+    note = None
+    if cover and cover.exists():
+        sent = requests.post(api("www.googleapis.com", "/upload/youtube/v3/thumbnails/set"), timeout=TIMEOUT, params={"videoId": video},
+                             headers={"Authorization": f"Bearer {token}", "Content-Type": "image/jpeg"}, data=cover.read_bytes())
+        if not sent.ok:
+            note = "Vidéo publiée, mais YouTube a refusé la miniature. Les miniatures personnalisées demandent une chaîne validée par téléphone."
+    return "published", f"https://www.youtube.com/shorts/{video}", note, video
 
 
 def clean(text: str) -> str:

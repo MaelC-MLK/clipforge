@@ -2,7 +2,7 @@ import { appendFile, mkdir, rename, rm, stat, writeFile } from "node:fs/promises
 import path from "node:path";
 import { getUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { abs, quotaBytes, usedBytes } from "@/lib/storage";
+import { abs, storageError } from "@/lib/storage";
 import { CHUNK, VIDEO_EXT } from "@/lib/upload";
 
 const fail = (status: number, error: string) => Response.json({ error }, { status });
@@ -32,9 +32,11 @@ export async function POST(req: Request) {
 
   const written = index === 0 ? 0 : ((await stat(part).catch(() => null))?.size ?? -1);
   if (written !== index * CHUNK) return fail(409, "Morceau reçu dans le désordre. Relance l'upload.");
-  if ((await usedBytes(user.id)) + written + chunk.length > quotaBytes(user)) {
+  // Le morceau déjà écrit est compté dans usedBytes (fichier .part).
+  const full = await storageError(user, chunk.length);
+  if (full) {
     await rm(part, { force: true });
-    return fail(413, "Quota de stockage dépassé.");
+    return fail(413, full);
   }
 
   await (index === 0 ? writeFile : appendFile)(part, chunk);
@@ -42,7 +44,7 @@ export async function POST(req: Request) {
 
   // Dernier morceau : le fichier devient une source et part en traitement.
   const source = await db.source.create({
-    data: { userId: user.id, kind: "upload", title: path.basename(name, ext).slice(0, 200) || "Sans titre", status: "analyzing" },
+    data: { userId: user.id, kind: "upload", title: path.basename(name, ext).slice(0, 200) || "Sans titre", status: "analyzing", final: h.get("x-final") === "1" },
   });
   const rel = `${user.id}/sources/${source.id}/source${ext}`;
   await mkdir(path.dirname(abs(rel)), { recursive: true });

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getUser } from "@/lib/auth";
+import { getUser, signupsOpen } from "@/lib/auth";
 import { AuthForm } from "./form";
 
 export default async function LoginPage() {
@@ -14,12 +14,14 @@ export default async function LoginPage() {
         <h1 className="mt-6 text-2xl font-bold">Connexion</h1>
         <p className="mt-1 text-sm text-zinc-400">Content de te revoir.</p>
         <AuthForm mode="login" />
-        <p className="mt-6 text-sm text-zinc-400">
-          Pas encore de compte ?{" "}
-          <Link href="/inscription" className="font-medium text-violet-300 hover:text-violet-200">
-            Créer un compte
-          </Link>
-        </p>
+        {signupsOpen() && (
+          <p className="mt-6 text-sm text-zinc-400">
+            Pas encore de compte ?{" "}
+            <Link href="/inscription" className="font-medium text-violet-300 hover:text-violet-200">
+              Créer un compte
+            </Link>
+          </p>
+        )}
         <p className="mt-2 text-sm text-zinc-400">
           <Link href="/mot-de-passe-oublie" className="font-medium text-violet-300 hover:text-violet-200">
             Mot de passe oublié ?

@@ -1,6 +1,6 @@
 import { LegalLinks } from "./legal";
 import Link from "next/link";
-import { getUser } from "@/lib/auth";
+import { getUser, signupsOpen } from "@/lib/auth";
 import { KeyGuide } from "./key-guide";
 
 const features = [
@@ -27,7 +27,12 @@ const withKey = [
 
 export default async function Landing() {
   const user = await getUser();
-  const primary = user ? { href: "/app", label: "Ouvrir Hooklip" } : { href: "/inscription", label: "Créer un compte gratuit" };
+  const open = signupsOpen();
+  const primary = user
+    ? { href: "/app", label: "Ouvrir Hooklip", short: "Ouvrir" }
+    : open
+      ? { href: "/inscription", label: "Créer un compte gratuit", short: "Créer un compte" }
+      : { href: "/login", label: "Se connecter", short: "Se connecter" };
 
   return (
     <div className="landing min-h-screen overflow-x-clip">
@@ -46,13 +51,13 @@ export default async function Landing() {
             Clé Claude
           </a>
         </nav>
-        {!user && (
+        {!user && open && (
           <Link href="/login" className="ml-auto text-sm font-medium text-zinc-200 hover:text-white sm:ml-0">
             Se connecter
           </Link>
         )}
-        <Link href={primary.href} className="btn-primary !px-4 !py-2">
-          {user ? "Ouvrir" : "Créer un compte"}
+        <Link href={primary.href} className={`btn-primary !px-4 !py-2 ${!user && open ? "" : "ml-auto sm:ml-0"}`}>
+          {primary.short}
         </Link>
       </header>
 

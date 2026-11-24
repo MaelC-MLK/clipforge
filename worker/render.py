@@ -146,8 +146,9 @@ def _ass_text(text: str) -> str:
     return _ass_escape(text.upper())
 
 
-def build_ass(words: list[dict], style: dict | None = None, hook: str = "", watermark: str = "", duration: float = 0) -> str:
-    """Tout le texte incrusté : sous-titres, accroche des 3 premières secondes, filigrane.
+def build_ass(words: list[dict], style: dict | None = None, hook: str = "", watermark: str = "", duration: float = 0,
+              hook_full: bool = False) -> str:
+    """Tout le texte incrusté : sous-titres, accroche (3 premières secondes, ou tout le clip avec hook_full), filigrane.
 
     Style « karaoke » : la ligne reste affichée, le mot prononcé prend la couleur choisie.
     Style « big » : un seul mot à la fois, en gros.
@@ -177,7 +178,7 @@ def build_ass(words: list[dict], style: dict | None = None, hook: str = "", wate
         events.append(f"Dialogue: 0,{_ass_time(0)},{_ass_time(duration)},Mark,,0,0,0,,{_ass_escape(watermark.strip())}")
     if hook.strip():
         # \q0 : retour à la ligne automatique, seulement pour l'accroche.
-        end = min(3, duration) if duration else 3
+        end = duration if hook_full and duration else min(3, duration) if duration else 3
         events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},Hook,,0,0,0,,{{\\q0\\fad(150,300)}}{_ass_escape(hook.strip())}")
     for line in group_lines(words):
         for i, word in enumerate(line):
@@ -231,14 +232,14 @@ def render_cmd(
     src: Path, dst: Path, start: float, duration: float, size: tuple[int, int], fps: str, edit: dict,
     points: list[tuple[float, float]], *, ass: str | None = None, keep: list[tuple[float, float]] | None = None,
     zooms: list[float] = (), voice: str | None = None, music: str | None = None, stack: str | None = None,
-    source_audio: bool = True,
+    stack_start: float = 0, source_audio: bool = True,
 ) -> list[str]:
     """Rendu final 1080x1920 H.264/AAC.
 
     points : centre horizontal du cadre principal au fil du temps (suivi du visage, images clés ou centre).
     ass, voice : noms de fichiers relatifs au dossier d'exécution. voice remplace le son d'origine.
     keep : parties gardées quand on coupe les silences. zooms : instants des zooms.
-    stack : vidéo secondaire empilée avec la principale. music : fond sonore, baissé quand ça parle.
+    stack : vidéo secondaire empilée avec la principale, lue à partir de stack_start. music : fond sonore, baissé quand ça parle.
     """
     w, h = size
     out = sum(b - a for a, b in keep) if keep else duration
@@ -266,7 +267,7 @@ def render_cmd(
         fx, fy = min(int(f["x"] * w), w - fw), min(int(f["y"] * h), h - fh)
         graph = ["[0:v]split[m0][c0]", f"[m0]{main}[main]", f"[c0]crop={fw}:{fh}:{fx}:{fy},{fill(top_h)}[cam]", "[cam][main]vstack[lay]"]
     elif stack:
-        inputs += ["-stream_loop", "-1", "-i", stack]  # vidéo secondaire plus courte que le clip : elle boucle
+        inputs += ["-stream_loop", "-1", *(["-ss", f"{stack_start:.2f}"] if stack_start > 0 else []), "-i", stack]  # plus courte que le clip : elle boucle
         order = "[main][sec]" if edit.get("stackPosition") == "bottom" else "[sec][main]"
         graph = [f"[0:v]{main}[main]", f"[{n}:v]{fill(OUT_H - main_h)},fps={fps}[sec]", f"{order}vstack=shortest=1[lay]"]
         n += 1

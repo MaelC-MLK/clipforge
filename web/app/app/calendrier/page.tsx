@@ -31,6 +31,8 @@ export default async function CalendarPage() {
                   error: p.error,
                   note: p.note,
                   sound: p.tiktokSound,
+                  title: p.title,
+                  description: p.description,
                 },
               ]
             : [],

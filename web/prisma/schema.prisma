@@ -17,13 +17,15 @@ model User {
   analyses         Analysis[]
   candidates       Candidate[]
   templates        Template[]
-  id               String          @id @default(cuid())
-  email            String          @unique // en minuscules
+  niches           Niche[]
+  recommendations  Recommendation[]
+  id               String           @id @default(cuid())
+  email            String           @unique // en minuscules
   passwordHash     String // scrypt, voir lib/password.ts
   keyEncrypted     String? // clé API Claude, AES-256-GCM, base64(iv | chiffré | tag). Absente tant que l'utilisateur ne l'a pas ajoutée
-  monthlyBudgetUsd Float           @default(20)
-  storageQuotaGb   Float           @default(20)
-  createdAt        DateTime        @default(now())
+  monthlyBudgetUsd Float            @default(20)
+  storageQuotaGb   Float            @default(20)
+  createdAt        DateTime         @default(now())
   sessions         Session[]
   sources          Source[]
   clips            Clip[]
@@ -46,6 +48,7 @@ model Source {
   userId     String
   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind       String // youtube | twitch | kick | other | upload
+  final      Boolean     @default(false) // vidéo déjà montée : publiée telle quelle, rangée avec les clips
   url        String?
   title      String
   duration   Float? // secondes
@@ -194,6 +197,7 @@ model Publication {
   status      String    @default("scheduled") // scheduled | publishing | published | draft_sent | failed
   title       String // titre YouTube ; vide pour les autres réseaux
   description String // légende (TikTok, Instagram) ou description (YouTube), hashtags compris
+  madeForKids Boolean   @default(false) // YouTube : vidéo déclarée « conçue pour les enfants »
   tiktokSound String    @default("") // nom du son à ajouter à la main : la vidéo part alors en brouillon TikTok
   postUrl     String?
   externalId  String? // identifiant du post chez le réseau, pour relire ses statistiques
@@ -214,4 +218,47 @@ model PasswordReset {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String   @unique
   expiresAt DateTime
+}
+
+// Catégorie Twitch ou Kick suivie : le worker y relève les clips les plus vus toutes les `everyHours` heures.
+model Niche {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform        String // twitch | kick
+  categoryId      String // identifiant Twitch, slug Kick
+  name            String
+  language        String           @default("") // Twitch seulement : fr, en… ; vide = toutes les langues
+  period          String           @default("day") // clips créés dans les dernières 24 h (day) ou 7 jours (week)
+  everyHours      Int              @default(6)
+  fetchedAt       DateTime? // dernier relevé ; vide = à faire au plus vite
+  error           String?
+  createdAt       DateTime         @default(now())
+  recommendations Recommendation[]
+
+  @@unique([userId, platform, categoryId])
+}
+
+// Clip trouvé dans une niche. Son nombre de vues est mis à jour à chaque relevé.
+model Recommendation {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nicheId       String
+  niche         Niche    @relation(fields: [nicheId], references: [id], onDelete: Cascade)
+  platform      String
+  externalId    String
+  url           String
+  title         String
+  channel       String
+  views         Int
+  seconds       Float
+  thumbnailUrl  String
+  language      String   @default("")
+  clipCreatedAt DateTime
+  status        String   @default("new") // new | imported | dismissed
+  fetchedAt     DateTime @default(now())
+
+  @@unique([userId, platform, externalId])
+  @@index([userId, views])
 }

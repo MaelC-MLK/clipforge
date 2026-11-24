@@ -1,5 +1,5 @@
 import { getUser } from "@/lib/auth";
-import { listSources, sourceState } from "@/lib/storage";
+import { listLibrary, sourceState } from "@/lib/storage";
 
 // SSE : renvoie la bibliothèque de l'utilisateur (ou l'état d'une source avec ?source=ID : clips, analyse, moments)
 // à chaque changement. La base est relue toutes les secondes.
@@ -8,7 +8,7 @@ export async function GET(req: Request) {
   if (!user) return new Response(null, { status: 401 });
 
   const sourceId = new URL(req.url).searchParams.get("source");
-  const load = () => (sourceId ? sourceState(user.id, sourceId) : listSources(user.id));
+  const load = () => (sourceId ? sourceState(user.id, sourceId) : listLibrary(user.id));
 
   const encoder = new TextEncoder();
   let timer: ReturnType<typeof setInterval>;

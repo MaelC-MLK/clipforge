@@ -8,6 +8,9 @@ const MAX_AGE = 60 * 60 * 24 * 30; // 30 jours
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
+/** Inscriptions fermées par défaut ; SIGNUPS_OPEN=1 les ouvre. Les comptes existants se connectent toujours. */
+export const signupsOpen = () => process.env.SIGNUPS_OPEN === "1";
+
 export async function createSession(userId: string) {
   const token = randomBytes(32).toString("hex");
   await db.session.create({

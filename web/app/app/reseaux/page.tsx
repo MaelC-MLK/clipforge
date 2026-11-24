@@ -1,11 +1,9 @@
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { isConfigured } from "@/lib/oauth";
-import { PROVIDERS, type Provider } from "@/lib/publish";
+import { PROVIDER_DOTS, PROVIDERS, type Provider } from "@/lib/publish";
 import { LegalLinks } from "../../legal";
 import { Disconnect } from "./disconnect";
-
-const DOTS: Record<Provider, string> = { youtube: "bg-red-500", tiktok: "bg-cyan-400", instagram: "bg-pink-500" };
 
 const NOTES: Record<Provider, string> = {
   youtube: "Les vidéos verticales de 3 minutes au plus sont classées en Shorts par YouTube.",
@@ -43,7 +41,7 @@ export default async function NetworksPage({ searchParams }: { searchParams: Pro
           <section key={provider} className="card space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="flex items-center gap-2 font-semibold">
-                <span className={`h-2.5 w-2.5 rounded-full ${DOTS[provider]}`} />
+                <span className={`h-2.5 w-2.5 rounded-full ${PROVIDER_DOTS[provider]}`} />
                 {PROVIDERS[provider]}
                 {mine.length > 0 && (
                   <span className="badge text-emerald-400">

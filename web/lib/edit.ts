@@ -29,6 +29,7 @@ export type Edit = {
   musicVolume: number; // 0 à 100
   musicFade: boolean;
   hook: string;
+  hookFull: boolean; // accroche affichée pendant tout le clip au lieu des 3 premières secondes
   progressBar: boolean;
   watermark: string;
   zoomPunch: boolean;
@@ -51,6 +52,7 @@ export const DEFAULT_EDIT: Edit = {
   musicVolume: 30,
   musicFade: true,
   hook: "",
+  hookFull: false,
   progressBar: false,
   watermark: "",
   zoomPunch: false,
@@ -100,6 +102,7 @@ export function sanitizeEdit(input: unknown): Edit {
     musicVolume: Math.round(num(i.musicVolume, 0, 100, d.musicVolume)),
     musicFade: Boolean(i.musicFade),
     hook: text(i.hook, 80),
+    hookFull: Boolean(i.hookFull),
     progressBar: Boolean(i.progressBar),
     watermark: text(i.watermark, 40),
     zoomPunch: Boolean(i.zoomPunch),
@@ -129,4 +132,21 @@ export function keyframeX(keyframes: Edit["keyframes"], t: number): number {
     if (t < b.t) return a.x + ((b.x - a.x) * (t - a.t)) / (b.t - a.t || 1);
   }
   return keyframes[keyframes.length - 1].x;
+}
+
+export const MIN_PART_SECONDS = 10;
+export const MAX_PARTS = 60;
+
+/** Découpe [0, duration] en parties de `seconds` secondes. Une fin de moins de 10 s est rattachée à la partie d'avant. */
+export function splitParts(duration: number, seconds: number, maxPart: number): { start: number; end: number }[] {
+  if (!(duration > 0) || !(seconds > 0)) return [];
+  const parts: { start: number; end: number }[] = [];
+  for (let start = 0; start < duration; start += seconds) parts.push({ start, end: Math.min(start + seconds, duration) });
+  const last = parts[parts.length - 1];
+  const before = parts[parts.length - 2];
+  if (before && last.end - last.start < MIN_PART_SECONDS && last.end - before.start <= maxPart) {
+    before.end = last.end;
+    parts.pop();
+  }
+  return parts;
 }

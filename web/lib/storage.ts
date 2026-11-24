@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, stat, statfs } from "node:fs/promises";
 import path from "node:path";
 import { db } from "./db";
 
@@ -7,15 +7,33 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR ?? "../data");
 /** Chemin absolu d'un chemin relatif stocké en base (toujours avec des `/`). */
 export const abs = (rel: string) => path.join(DATA_DIR, rel);
 
+/** Espace occupé : sources et clips en base, plus les envois en cours (fichiers .part). */
 export async function usedBytes(userId: string): Promise<number> {
-  const [sources, clips] = await Promise.all([
+  const dir = abs(`${userId}/uploads`);
+  const [sources, clips, parts] = await Promise.all([
     db.source.aggregate({ where: { userId }, _sum: { sizeBytes: true } }),
     db.clip.aggregate({ where: { userId }, _sum: { sizeBytes: true } }),
+    readdir(dir).then(
+      (names) => Promise.all(names.map((n) => stat(path.join(dir, n)).then((s) => s.size, () => 0))),
+      () => [] as number[], // dossier pas encore créé
+    ),
   ]);
-  return Number(sources._sum.sizeBytes ?? 0) + Number(clips._sum.sizeBytes ?? 0);
+  return Number(sources._sum.sizeBytes ?? 0) + Number(clips._sum.sizeBytes ?? 0) + parts.reduce((a, b) => a + b, 0);
 }
 
 export const quotaBytes = (user: { storageQuotaGb: number }) => user.storageQuotaGb * 1024 ** 3;
+
+// Espace minimum à laisser libre sur le serveur, tous comptes confondus (même réglage dans worker/worker.py).
+const MIN_FREE_BYTES = Number(process.env.MIN_FREE_GB || 20) * 1024 ** 3;
+
+/** Message d'erreur si l'utilisateur ne peut plus rien ajouter (quota ou disque du serveur), sinon null. */
+export async function storageError(user: { id: string; storageQuotaGb: number }, adding = 0): Promise<string | null> {
+  const disk = await statfs(DATA_DIR).catch(() => null);
+  if (disk && disk.bavail * disk.bsize - adding < MIN_FREE_BYTES) return "Le serveur est presque plein : les imports et les rendus sont suspendus pour le moment.";
+  if ((await usedBytes(user.id)) + adding > quotaBytes(user))
+    return `Quota de stockage atteint (${user.storageQuotaGb} Go). Supprime des sources ou des clips pour continuer.`;
+  return null;
+}
 
 /** Liste envoyée au front (bibliothèque + SSE). */
 export async function listSources(userId: string) {
@@ -28,6 +46,7 @@ export async function listSources(userId: string) {
     id: s.id,
     title: s.title,
     kind: s.kind,
+    final: s.final,
     status: s.status,
     error: s.error,
     duration: s.duration,
@@ -37,6 +56,35 @@ export async function listSources(userId: string) {
 }
 
 export type SourceRow = Awaited<ReturnType<typeof listSources>>[number];
+
+/** Bibliothèque envoyée au front (page + SSE) : les sources et tous les clips de l'utilisateur. */
+export async function listLibrary(userId: string) {
+  const [sources, clips] = await Promise.all([
+    listSources(userId),
+    db.clip.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      include: { jobs: { orderBy: { createdAt: "desc" }, take: 1 }, source: { select: { title: true, final: true } }, _count: { select: { publications: true } } },
+    }),
+  ]);
+  return {
+    sources,
+    clips: clips.map((c) => ({
+      id: c.id,
+      title: c.title,
+      sourceId: c.sourceId,
+      sourceTitle: c.source.title,
+      fromFinal: c.source.final,
+      seconds: c.end - c.start,
+      status: c.status,
+      error: c.error,
+      progress: c.jobs[0]?.progress ?? 0,
+      posts: c._count.publications,
+    })),
+  };
+}
+
+export type LibraryState = Awaited<ReturnType<typeof listLibrary>>;
 
 export async function listClips(userId: string, sourceId: string) {
   const clips = await db.clip.findMany({

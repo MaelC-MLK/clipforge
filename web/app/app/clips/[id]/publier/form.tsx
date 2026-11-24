@@ -8,7 +8,7 @@ import { generateMeta, schedulePublications } from "../../../../actions";
 const LANGUAGES = ["français", "English", "español", "Deutsch", "italiano", "português"];
 
 /** Valeur d'un champ datetime-local pour une date, dans le fuseau du navigateur. */
-function localInput(date: Date) {
+export function localInput(date: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -30,6 +30,7 @@ export function PublishForm(props: {
   const [texts, setTexts] = useState(() => fromMeta(props.initialMeta));
   const [selected, setSelected] = useState<string[]>([]);
   const [sound, setSound] = useState("");
+  const [kids, setKids] = useState(false);
   // Calculée au montage seulement : pas d'heure différente entre le serveur et le navigateur.
   const [when, setWhen] = useState(() => localInput(new Date(Date.now() + 3600 * 1000)));
   const [message, setMessage] = useState<{ error?: string; ok?: string }>({});
@@ -111,6 +112,18 @@ export function PublishForm(props: {
             {PROVIDERS[a.provider]} · {a.name}
           </label>
         ))}
+        {chosen("youtube") && (
+          <div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="h-4 w-4" checked={kids} onChange={(e) => setKids(e.target.checked)} />
+              YouTube : vidéo conçue pour les enfants
+            </label>
+            <p className="mt-1 text-xs text-zinc-500">
+              À cocher si le contenu s&apos;adresse d&apos;abord aux enfants. YouTube désactive alors les commentaires et les publicités personnalisées
+              sur cette vidéo.
+            </p>
+          </div>
+        )}
         {chosen("tiktok") && (
           <div>
             <label className="label" htmlFor="sound">
@@ -156,7 +169,7 @@ export function PublishForm(props: {
           onClick={async () => {
             setPending("schedule");
             setMessage(
-              await schedulePublications({ clipId: props.clipId, accountIds: selected, when: new Date(when).toISOString(), texts, tiktokSound: sound }),
+              await schedulePublications({ clipId: props.clipId, accountIds: selected, when: new Date(when).toISOString(), texts, tiktokSound: sound, madeForKids: kids }),
             );
             setPending("");
           }}

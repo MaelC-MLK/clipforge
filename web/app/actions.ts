@@ -5,18 +5,19 @@ import { rm } from "node:fs/promises";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { createSession, destroySession, requireUser } from "@/lib/auth";
+import { createSession, destroySession, requireUser, signupsOpen } from "@/lib/auth";
 import { checkKey, generateClipMeta, usesSubscription } from "@/lib/claude";
 import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
-import { abs, listMusic, quotaBytes, usedBytes } from "@/lib/storage";
+import { abs, listMusic, storageError } from "@/lib/storage";
 import { mailConfigured, sendMail } from "@/lib/mail";
 import { APP_URL } from "@/lib/oauth";
-import { type Edit, sanitizeEdit, sanitizeWords, type Word } from "@/lib/edit";
+import { type Edit, MAX_PARTS, MIN_PART_SECONDS, sanitizeEdit, sanitizeWords, splitParts, type Word } from "@/lib/edit";
 import { hashPassword, MAX_PASSWORD, MIN_PASSWORD, verifyPassword } from "@/lib/password";
 import { type ClipMeta, DAILY_LIMITS, isProvider, PROVIDERS } from "@/lib/publish";
 import { MAX_CLIP_SECONDS } from "@/lib/upload";
+import { type Category, EVERY_HOURS, isNichePlatform, LANGUAGES, MAX_NICHES, NICHE_PLATFORMS, searchCategories, twitchConfigured } from "@/lib/niches";
 
 export type FormState = { error?: string; ok?: string };
 
@@ -45,6 +46,7 @@ async function validateKey(key: string): Promise<string | null> {
 const NO_KEY = "Ajoute d'abord ta clé API Claude dans Compte.";
 
 export async function signup(_: FormState, form: FormData): Promise<FormState> {
+  if (!signupsOpen()) return { error: "Les inscriptions sont fermées pour le moment." };
   if (await tooManyAttempts()) return { error: "Trop de tentatives. Réessaie dans une minute." };
   const email = String(form.get("email") ?? "").trim().toLowerCase();
   const password = String(form.get("password") ?? "");
@@ -136,11 +138,11 @@ export async function importUrl(_: FormState, form: FormData): Promise<FormState
     return { error: "URL invalide." };
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "URL invalide." };
-  if ((await usedBytes(user.id)) >= quotaBytes(user))
-    return { error: "Quota de stockage atteint. Supprime des sources pour continuer." };
+  const full = await storageError(user);
+  if (full) return { error: full };
 
   const source = await db.source.create({
-    data: { userId: user.id, kind: kindOf(url.hostname), url: url.href, title: url.href, status: "downloading" },
+    data: { userId: user.id, kind: kindOf(url.hostname), url: url.href, title: url.href, status: "downloading", final: form.get("final") === "1" },
   });
   await db.job.create({
     data: { userId: user.id, sourceId: source.id, type: "ingest", payload: { sourceId: source.id } },
@@ -166,7 +168,7 @@ async function checkedEdit(userId: string, input: unknown): Promise<Edit | strin
   return edit;
 }
 
-export async function createClip(input: { sourceId: string; title: string; start: number; end: number; edit: unknown }): Promise<FormState> {
+async function newClip(input: { sourceId: string; title: string; start: number; end: number; edit: unknown }): Promise<{ error: string } | { id: string }> {
   const user = await requireUser();
   const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
   if (!source) return { error: "Source introuvable ou pas encore prête." };
@@ -179,8 +181,8 @@ export async function createClip(input: { sourceId: string; title: string; start
   if (end - start > MAX_CLIP_SECONDS) return { error: `Un clip dure au maximum ${MAX_CLIP_SECONDS} secondes.` };
   const edit = await checkedEdit(user.id, { ...Object(input.edit), customWords: false });
   if (typeof edit === "string") return { error: edit };
-  if ((await usedBytes(user.id)) >= quotaBytes(user))
-    return { error: "Quota de stockage atteint. Supprime des sources ou des clips pour continuer." };
+  const full = await storageError(user);
+  if (full) return { error: full };
 
   const clip = await db.clip.create({
     data: {
@@ -193,7 +195,40 @@ export async function createClip(input: { sourceId: string; title: string; start
     },
   });
   await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "render", payload: { clipId: clip.id } } });
-  return { ok: "Rendu lancé." };
+  return { id: clip.id };
+}
+
+export async function createClip(input: { sourceId: string; title: string; start: number; end: number; edit: unknown }): Promise<FormState> {
+  const result = await newClip(input);
+  return "error" in result ? result : { ok: "Rendu lancé." };
+}
+
+/** Publier une vidéo déjà montée : un clip de toute la source, sans sous-titres ni retouche du son, puis la page de publication. */
+export async function publishSource(sourceId: string): Promise<FormState> {
+  const result = await fullClip(sourceId);
+  if ("error" in result) return result;
+  redirect(`/app/clips/${result.id}/publier`);
+}
+
+/** Vidéo importée déjà montée : crée son clip entier dès qu'elle est prête (appelé par la bibliothèque). */
+export async function prepareFinal(sourceId: string): Promise<FormState> {
+  const result = await fullClip(sourceId);
+  return "error" in result ? result : {};
+}
+
+/** Le clip qui couvre toute une source, sans montage. Réutilise celui qui existe déjà. */
+async function fullClip(sourceId: string): Promise<{ error: string } | { id: string }> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(sourceId), userId: user.id, status: "ready" } });
+  if (!source?.duration) return { error: "Source introuvable ou pas encore prête." };
+  const existing = await db.clip.findFirst({
+    where: { userId: user.id, sourceId: source.id, start: 0, end: { gte: source.duration - 0.05 }, status: { not: "error" } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (existing) return { id: existing.id };
+  if (source.duration > MAX_CLIP_SECONDS)
+    return { error: `Cette vidéo dépasse ${MAX_CLIP_SECONDS / 60} minutes : elle ne peut pas être publiée telle quelle. Découpe-la en clips.` };
+  return newClip({ sourceId: source.id, title: source.title, start: 0, end: source.duration, edit: { crop: "center", subtitles: false, loudnorm: false } });
 }
 
 /** Relance le rendu de clips existants, avec de nouveaux réglages et/ou des sous-titres corrigés. */
@@ -319,6 +354,7 @@ export async function schedulePublications(input: {
   when: string;
   texts: { tiktok: string; instagram: string; youtubeTitle: string; youtubeDescription: string };
   tiktokSound: string;
+  madeForKids?: boolean;
 }): Promise<FormState> {
   const user = await requireUser();
   const clip = await db.clip.findFirst({ where: { id: String(input.clipId), userId: user.id, status: "rendered" } });
@@ -362,6 +398,7 @@ export async function schedulePublications(input: {
         description:
           account.provider === "youtube" ? text(input.texts?.youtubeDescription, 4000) : text(account.provider === "tiktok" ? input.texts?.tiktok : input.texts?.instagram, 2200),
         tiktokSound: account.provider === "tiktok" ? sound : "",
+        madeForKids: account.provider === "youtube" && input.madeForKids === true,
       },
     });
     // Le job attend dans la file jusqu'à `runAt` : c'est lui, la planification.
@@ -372,8 +409,41 @@ export async function schedulePublications(input: {
 
 export async function cancelPublication(id: string) {
   const user = await requireUser();
-  // Le worker ne trouve plus la ligne et abandonne le job.
-  await db.publication.deleteMany({ where: { id, userId: user.id, status: { in: ["scheduled", "failed"] } } });
+  // En attente : le worker ne trouve plus la ligne et abandonne le job. Déjà publiée : seule la ligne de Hooklip
+  // disparaît, le post reste en ligne sur le réseau. Une publication en cours d'envoi ne se supprime pas.
+  await db.publication.deleteMany({ where: { id, userId: user.id, status: { not: "publishing" } } });
+}
+
+/** Modifie une publication encore en attente : date et textes. Le job de la file est décalé à la nouvelle date. */
+export async function updatePublication(input: { id: string; when: string; title: string; description: string }): Promise<FormState> {
+  const user = await requireUser();
+  const id = String(input.id);
+  const publication = await db.publication.findFirst({ where: { id, userId: user.id }, include: { account: { select: { provider: true } } } });
+  if (!publication) return { error: "Publication introuvable." };
+
+  const asked = new Date(input.when);
+  if (Number.isNaN(asked.getTime())) return { error: "Date invalide." };
+  if (asked.getTime() > Date.now() + 366 * 24 * 3600 * 1000) return { error: "La date est trop lointaine (un an au plus)." };
+  const scheduledAt = asked.getTime() < Date.now() ? new Date() : asked;
+  const youtube = publication.account.provider === "youtube";
+  const text = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
+
+  // shortcut: le plafond par 24 heures n'est pas revérifié à la nouvelle date ; à ajouter si des comptes s'en approchent.
+  // Le filtre sur le statut évite de toucher une publication que le worker vient de prendre.
+  const { count } = await db.publication.updateMany({
+    where: { id, userId: user.id, status: "scheduled" },
+    data: {
+      scheduledAt,
+      title: youtube ? text(input.title, 100) || publication.title : "",
+      description: text(input.description, youtube ? 4000 : 2200),
+    },
+  });
+  if (!count) return { error: "Cette publication n'est plus en attente : elle ne peut plus être modifiée." };
+  await db.job.updateMany({
+    where: { userId: user.id, type: "publish", status: "queued", payload: { path: ["publicationId"], equals: id } },
+    data: { runAt: scheduledAt },
+  });
+  return { ok: "Publication modifiée." };
 }
 
 export async function retryPublication(id: string): Promise<FormState> {
@@ -392,6 +462,41 @@ export async function deleteAccount(id: string) {
 }
 
 /** Crée d'un coup un clip par moment proposé, avec les mêmes réglages. */
+/** Découpe toute la source en parties de même durée, avec les réglages de l'éditeur (sous-titres, accroche, vidéo empilée…). */
+export async function splitSource(input: { sourceId: string; seconds: number; numbered: boolean; edit: unknown }): Promise<FormState> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
+  if (!source?.duration) return { error: "Source introuvable ou pas encore prête." };
+  const seconds = Number(input.seconds);
+  if (!Number.isFinite(seconds) || seconds < MIN_PART_SECONDS || seconds > MAX_CLIP_SECONDS)
+    return { error: `Une partie dure entre ${MIN_PART_SECONDS} et ${MAX_CLIP_SECONDS} secondes.` };
+  const parts = splitParts(source.duration, seconds, MAX_CLIP_SECONDS);
+  if (parts.length > MAX_PARTS) return { error: `Cela ferait ${parts.length} parties (${MAX_PARTS} au plus). Choisis une durée plus longue.` };
+  // Images clés du cadrage manuel : propres à un extrait, elles n'ont pas de sens sur toutes les parties.
+  const edit = await checkedEdit(user.id, { ...Object(input.edit), customWords: false, keyframes: [] });
+  if (typeof edit === "string") return { error: edit };
+  const full = await storageError(user);
+  if (full) return { error: full };
+
+  const numbered = input.numbered !== false && parts.length > 1;
+  for (const [i, part] of parts.entries()) {
+    const label = `Partie ${i + 1}`;
+    const hook = numbered ? [edit.hook.trim(), label].filter(Boolean).join(" · ").slice(0, 120) : edit.hook;
+    const clip = await db.clip.create({
+      data: {
+        userId: user.id,
+        sourceId: source.id,
+        title: (parts.length > 1 ? `${source.title.slice(0, 120)} – ${label.toLowerCase()}/${parts.length}` : source.title).slice(0, 150),
+        start: part.start,
+        end: part.end,
+        edit: { ...edit, hook },
+      },
+    });
+    await db.job.create({ data: { userId: user.id, clipId: clip.id, type: "render", payload: { clipId: clip.id } } });
+  }
+  return { ok: `${parts.length} partie${parts.length > 1 ? "s" : ""} en cours de rendu, l'une après l'autre. Elles arrivent dans Vidéos finales.` };
+}
+
 export async function createClipsBatch(input: { sourceId: string; candidateIds: string[]; edit: unknown }): Promise<FormState> {
   const user = await requireUser();
   const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
@@ -401,7 +506,8 @@ export async function createClipsBatch(input: { sourceId: string; candidateIds: 
   if (candidates.length === 0) return { error: "Aucun moment à transformer en clip." };
   const edit = await checkedEdit(user.id, { ...Object(input.edit), customWords: false, keyframes: [] });
   if (typeof edit === "string") return { error: edit };
-  if ((await usedBytes(user.id)) >= quotaBytes(user)) return { error: "Quota de stockage atteint. Supprime des sources ou des clips pour continuer." };
+  const full = await storageError(user);
+  if (full) return { error: full };
 
   for (const c of candidates) {
     const clip = await db.clip.create({
@@ -464,4 +570,136 @@ export async function resetPassword(_: FormState, form: FormData): Promise<FormS
   await db.session.deleteMany({ where: { userId: reset.userId } }); // quiconque était connecté avec l'ancien mot de passe est déconnecté
   await createSession(reset.userId);
   redirect("/app");
+}
+
+// --- Clips recommandés : niches Twitch / Kick relevées par le worker ---
+
+export async function findCategories(platform: string, query: string): Promise<{ error: string } | { categories: Category[] }> {
+  await requireUser();
+  if (!isNichePlatform(platform)) return { error: "Plateforme inconnue." };
+  if (platform === "twitch" && !twitchConfigured()) return { error: "Twitch n'est pas encore configuré sur Hooklip." };
+  const q = String(query).trim().slice(0, 80);
+  if (q.length < 2) return { categories: [] };
+  try {
+    return { categories: await searchCategories(platform, q) };
+  } catch {
+    return { error: `${NICHE_PLATFORMS[platform]} ne répond pas pour le moment. Réessaie.` };
+  }
+}
+
+function nicheSettings(input: { language?: unknown; period?: unknown; everyHours?: unknown }) {
+  return {
+    language: typeof input.language === "string" && input.language in LANGUAGES ? input.language : "",
+    period: input.period === "week" ? "week" : "day",
+    everyHours: EVERY_HOURS.includes(Number(input.everyHours)) ? Number(input.everyHours) : 6,
+  };
+}
+
+export async function addNiche(input: { platform: string; categoryId: string; name: string; language?: string; period?: string; everyHours?: number }): Promise<FormState> {
+  const user = await requireUser();
+  if (!isNichePlatform(input.platform)) return { error: "Plateforme inconnue." };
+  const categoryId = String(input.categoryId).slice(0, 100);
+  const name = String(input.name).trim().slice(0, 100);
+  if (!categoryId || !name) return { error: "Choisis une catégorie." };
+  if ((await db.niche.count({ where: { userId: user.id } })) >= MAX_NICHES) return { error: `${MAX_NICHES} niches au plus.` };
+  const settings = nicheSettings(input);
+  // Kick ne donne pas la langue des clips.
+  if (input.platform === "kick") settings.language = "";
+  await db.niche.upsert({
+    where: { userId_platform_categoryId: { userId: user.id, platform: input.platform, categoryId } },
+    create: { userId: user.id, platform: input.platform, categoryId, name, ...settings },
+    update: { ...settings, fetchedAt: null },
+  });
+  revalidatePath("/app/recommandes");
+  return { ok: `${name} ajoutée. Les premiers clips arrivent d'ici une minute.` };
+}
+
+export async function updateNiche(input: { id: string; language?: string; period?: string; everyHours?: number }) {
+  const user = await requireUser();
+  const niche = await db.niche.findFirst({ where: { id: String(input.id), userId: user.id } });
+  if (!niche) return;
+  const settings = nicheSettings(input);
+  if (niche.platform === "kick") settings.language = "";
+  // Langue ou période changée : les clips déjà relevés ne correspondent plus.
+  const changed = settings.language !== niche.language || settings.period !== niche.period;
+  if (changed) await db.recommendation.deleteMany({ where: { nicheId: niche.id, status: { not: "imported" } } });
+  await db.niche.update({ where: { id: niche.id }, data: { ...settings, ...(changed ? { fetchedAt: null } : {}) } });
+  revalidatePath("/app/recommandes");
+}
+
+export async function refreshNiches() {
+  const user = await requireUser();
+  await db.niche.updateMany({ where: { userId: user.id }, data: { fetchedAt: null } });
+  revalidatePath("/app/recommandes");
+}
+
+export async function deleteNiche(id: string) {
+  const user = await requireUser();
+  await db.niche.deleteMany({ where: { id: String(id), userId: user.id } }); // supprime ses clips recommandés ; les sources déjà importées restent
+  revalidatePath("/app/recommandes");
+}
+
+/** Importe un clip recommandé comme source à découper : il est horizontal, il faut le recadrer. */
+export async function importRecommendation(id: string): Promise<FormState> {
+  const user = await requireUser();
+  const reco = await db.recommendation.findFirst({ where: { id: String(id), userId: user.id } });
+  if (!reco) return { error: "Clip introuvable." };
+  const full = await storageError(user);
+  if (full) return { error: full };
+  const source = await db.source.create({
+    data: { userId: user.id, kind: reco.platform, url: reco.url, title: reco.title || reco.url, status: "downloading" },
+  });
+  await db.job.create({ data: { userId: user.id, sourceId: source.id, type: "ingest", payload: { sourceId: source.id } } });
+  await db.recommendation.update({ where: { id: reco.id }, data: { status: "imported" } });
+  revalidatePath("/app/recommandes");
+  return { ok: "Import lancé : le clip arrive dans tes sources." };
+}
+
+export async function dismissRecommendation(id: string) {
+  const user = await requireUser();
+  await db.recommendation.updateMany({ where: { id: String(id), userId: user.id }, data: { status: "dismissed" } });
+  revalidatePath("/app/recommandes");
+}
+
+// --- Fast clip : une vidéo déjà à la bonne durée, deux ou trois réglages, puis la programmation ---
+
+/** Source d'un fast clip à partir d'un lien ou d'un clip recommandé. Renvoie l'id de la source créée. */
+export async function fastSource(input: { url?: string; recoId?: string }): Promise<{ error: string } | { id: string }> {
+  const user = await requireUser();
+  let url: URL;
+  let title: string;
+  let kind: string;
+  const reco = input.recoId ? await db.recommendation.findFirst({ where: { id: String(input.recoId), userId: user.id } }) : null;
+  try {
+    url = new URL(reco ? reco.url : String(input.url ?? "").trim());
+  } catch {
+    return { error: input.recoId ? "Clip introuvable." : "URL invalide." };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return { error: "URL invalide." };
+  if (reco) {
+    title = reco.title || url.href;
+    kind = reco.platform;
+  } else {
+    title = url.href;
+    kind = kindOf(url.hostname);
+  }
+  const full = await storageError(user);
+  if (full) return { error: full };
+  const source = await db.source.create({ data: { userId: user.id, kind, url: url.href, title, status: "downloading" } });
+  await db.job.create({ data: { userId: user.id, sourceId: source.id, type: "ingest", payload: { sourceId: source.id } } });
+  if (reco) await db.recommendation.update({ where: { id: reco.id }, data: { status: "imported" } });
+  return { id: source.id };
+}
+
+/** Rend toute la source avec les réglages rapides, puis ouvre la page de publication (qui attend la fin du rendu). */
+export async function fastClip(input: { sourceId: string; title: string; edit: unknown }): Promise<FormState> {
+  const user = await requireUser();
+  const source = await db.source.findFirst({ where: { id: String(input.sourceId), userId: user.id, status: "ready" } });
+  if (!source?.duration) return { error: "Vidéo pas encore prête." };
+  if (source.duration > MAX_CLIP_SECONDS)
+    return { error: `Cette vidéo dure plus de ${MAX_CLIP_SECONDS / 60} minutes : découpe-la dans l'éditeur.` };
+  const title = String(input.title ?? "").trim().slice(0, 150) || source.title;
+  const result = await newClip({ sourceId: source.id, title, start: 0, end: source.duration, edit: input.edit });
+  if ("error" in result) return result;
+  redirect(`/app/clips/${result.id}/publier`);
 }

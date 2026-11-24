@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { PROVIDERS, type Provider, STATUS_LABELS } from "@/lib/publish";
-import { cancelPublication, retryPublication } from "../../actions";
+import { PROVIDER_DOTS, PROVIDERS, type Provider, STATUS_LABELS } from "@/lib/publish";
+import { cancelPublication, retryPublication, updatePublication } from "../../actions";
+import { localInput } from "../clips/[id]/publier/form";
 
 type Item = {
   id: string;
@@ -17,6 +18,8 @@ type Item = {
   error: string | null;
   note: string | null;
   sound: string;
+  title: string;
+  description: string;
 };
 
 const COLORS: Record<string, string> = {
@@ -38,6 +41,10 @@ export function Calendar({ items }: { items: Item[] }) {
   const today = new Date();
   const month = mounted ? new Date(today.getFullYear(), today.getMonth() + offset, 1) : null;
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [selected, setSelected] = useState<string | null>(null); // publication ouverte depuis la grille
+  const [editing, setEditing] = useState<{ id: string; when: string; title: string; description: string } | null>(null);
+  const selectedItem = items.find((p) => p.id === selected);
 
   useEffect(() => {
     // Les statuts changent côté worker : on relit la page régulièrement.
@@ -49,13 +56,21 @@ export function Calendar({ items }: { items: Item[] }) {
 
   const row = (p: Item) => (
     <li key={p.id} className="card space-y-1">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="min-w-0 truncate font-medium">{p.clipTitle}</p>
-        <span className={`text-sm ${COLORS[p.status] ?? ""}`}>{STATUS_LABELS[p.status] ?? p.status}</span>
+      <div className="flex gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element -- miniature servie par notre route, pas d'optimisation utile */}
+        <img src={`/api/clips/${p.clipId}/thumb`} alt="" className="h-20 w-[2.8125rem] shrink-0 rounded-lg bg-black object-cover" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="min-w-0 truncate font-medium">{p.clipTitle}</p>
+            <span className={`badge ${COLORS[p.status] ?? ""}`}>{STATUS_LABELS[p.status] ?? p.status}</span>
+          </div>
+          <p className="flex flex-wrap items-center gap-1.5 text-xs text-zinc-400">
+            <span className={`h-2 w-2 rounded-full ${PROVIDER_DOTS[p.provider]}`} />
+            {PROVIDERS[p.provider]} · {p.account}
+          </p>
+          <p className="text-xs text-zinc-500">{new Date(p.at).toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}</p>
+        </div>
       </div>
-      <p className="text-xs text-zinc-500">
-        {PROVIDERS[p.provider]} · {p.account} · {new Date(p.at).toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" })}
-      </p>
       {p.status === "failed" && (
         <p role="alert" className="text-sm text-red-400">
           {p.error} Tu peux télécharger le clip et le publier à la main.
@@ -84,19 +99,76 @@ export function Calendar({ items }: { items: Item[] }) {
             </a>
           </>
         )}
-        {(p.status === "scheduled" || p.status === "failed") && (
+        {p.status === "scheduled" && (
+          <button
+            className="btn-ghost"
+            onClick={() => setEditing(editing?.id === p.id ? null : { id: p.id, when: localInput(new Date(p.at)), title: p.title, description: p.description })}
+          >
+            {editing?.id === p.id ? "Fermer" : "Modifier"}
+          </button>
+        )}
+        {p.status !== "publishing" && (
           <button
             className="btn-ghost"
             onClick={async () => {
-              if (!confirm("Supprimer cette publication ?")) return;
+              const online = p.status === "published" || p.status === "draft_sent";
+              const question = online
+                ? `Retirer ce post de Hooklip ? Il reste en ligne sur ${PROVIDERS[p.provider]} : supprime-le aussi là-bas si tu ne veux plus qu'il soit visible.`
+                : "Supprimer cette publication ?";
+              if (!confirm(question)) return;
               await cancelPublication(p.id);
               router.refresh();
             }}
           >
-            {p.status === "scheduled" ? "Annuler" : "Supprimer"}
+            {p.status === "scheduled" ? "Annuler" : p.status === "failed" ? "Supprimer" : "Retirer de Hooklip"}
           </button>
         )}
       </div>
+      {editing?.id === p.id && (
+        <div className="mt-2 space-y-3 border-t border-white/10 pt-3">
+          <div>
+            <label className="label" htmlFor={`when-${p.id}`}>
+              Date et heure de publication (ton fuseau horaire)
+            </label>
+            <input id={`when-${p.id}`} type="datetime-local" value={editing.when} onChange={(e) => setEditing({ ...editing, when: e.target.value })} className="input" />
+            <p className="mt-1 text-xs text-zinc-500">Une date passée publie tout de suite.</p>
+          </div>
+          {p.provider === "youtube" && (
+            <div>
+              <label className="label" htmlFor={`title-${p.id}`}>
+                Titre (100 caractères au plus)
+              </label>
+              <input id={`title-${p.id}`} maxLength={100} value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} className="input" />
+            </div>
+          )}
+          <div>
+            <label className="label" htmlFor={`description-${p.id}`}>
+              {p.provider === "youtube" ? "Description" : "Légende"}
+            </label>
+            <textarea
+              id={`description-${p.id}`}
+              rows={4}
+              maxLength={p.provider === "youtube" ? 4000 : 2200}
+              value={editing.description}
+              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+              className="input"
+            />
+          </div>
+          <button
+            className="btn"
+            disabled={!editing.when}
+            onClick={async () => {
+              const result = await updatePublication({ ...editing, when: new Date(editing.when).toISOString() });
+              setError(result.error ?? "");
+              setMessage(result.ok ?? "");
+              if (result.ok) setEditing(null);
+              router.refresh();
+            }}
+          >
+            Enregistrer
+          </button>
+        </div>
+      )}
     </li>
   );
 
@@ -121,6 +193,11 @@ export function Calendar({ items }: { items: Item[] }) {
         {message && (
           <span role="status" className="text-sm text-emerald-400">
             {message}
+          </span>
+        )}
+        {error && (
+          <span role="alert" className="text-sm text-red-400">
+            {error}
           </span>
         )}
       </div>
@@ -150,22 +227,42 @@ export function Calendar({ items }: { items: Item[] }) {
                   .filter((p) => sameDay(new Date(p.at), day))
                   .sort((a, b) => a.at.localeCompare(b.at))
                   .map((p) => (
-                    <div key={p.id} className={`truncate ${COLORS[p.status] ?? ""}`} title={`${PROVIDERS[p.provider]} · ${p.account} · ${STATUS_LABELS[p.status] ?? p.status}`}>
-                      {time(p.at)} {p.clipTitle}
-                    </div>
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`mt-1 flex w-full items-center gap-1.5 rounded-md p-0.5 text-left hover:bg-white/10 ${selected === p.id ? "bg-white/10 ring-1 ring-violet-400/60" : ""}`}
+                      title={`${p.clipTitle} · ${PROVIDERS[p.provider]} · ${p.account} · ${STATUS_LABELS[p.status] ?? p.status}`}
+                      onClick={() => setSelected(selected === p.id ? null : p.id)}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element -- miniature servie par notre route, pas d'optimisation utile */}
+                      <img src={`/api/clips/${p.clipId}/thumb`} alt="" className="hidden h-9 w-5 shrink-0 rounded-sm bg-black object-cover sm:block" />
+                      <span className="min-w-0 flex-1">
+                        <span className={`flex items-center gap-1 font-medium ${COLORS[p.status] ?? ""}`}>
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${PROVIDER_DOTS[p.provider]}`} />
+                          {time(p.at)}
+                        </span>
+                        <span className="block truncate text-zinc-400">{p.clipTitle}</span>
+                      </span>
+                    </button>
                   ))}
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-zinc-500">Gris : en attente. Vert : publié. Jaune : brouillon TikTok à finir. Rouge : échec. Détails dans la vue Liste.</p>
+          <p className="mt-2 text-xs text-zinc-500">Heure en gris : en attente. Vert : publié. Jaune : brouillon TikTok à finir. Rouge : échec. Pastille : rouge YouTube, bleue TikTok, rose Instagram. Clique sur une publication pour la modifier ou l&apos;annuler.</p>
         </div>
       )}
 
+      {view === "calendar" && mounted && selectedItem && (
+        <div>
+          <h2 className="mb-2 font-medium">Publication sélectionnée</h2>
+          <ul className="space-y-2">{row(selectedItem)}</ul>
+        </div>
+      )}
       {view === "list" && mounted && <ul className="space-y-2">{items.map(row)}</ul>}
       {view === "calendar" && mounted && items.some((p) => p.status === "failed" || p.status === "draft_sent") && (
         <div>
           <h2 className="mb-2 font-medium">À traiter</h2>
-          <ul className="space-y-2">{items.filter((p) => p.status === "failed" || p.status === "draft_sent").map(row)}</ul>
+          <ul className="space-y-2">{items.filter((p) => p.id !== selected && (p.status === "failed" || p.status === "draft_sent")).map(row)}</ul>
         </div>
       )}
     </div>

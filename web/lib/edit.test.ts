@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_EDIT, keyframeX, sanitizeEdit, sanitizeWords } from "./edit.ts";
+import { DEFAULT_EDIT, keyframeX, sanitizeEdit, sanitizeWords, splitParts } from "./edit.ts";
 
 test("une entrée vide ou absurde donne des réglages sûrs", () => {
   for (const input of [null, undefined, "x", 42, [], {}]) {
@@ -51,4 +51,21 @@ test("position du cadre entre deux images clés", () => {
   assert.equal(keyframeX(k, 0), 0.2);
   assert.equal(keyframeX(k, 3), 0.5);
   assert.equal(keyframeX(k, 9), 0.8);
+});
+
+test("découpage automatique en parties", () => {
+  assert.deepEqual(splitParts(150, 61, 180), [
+    { start: 0, end: 61 },
+    { start: 61, end: 122 },
+    { start: 122, end: 150 },
+  ]);
+  // Une fin trop courte (5 s) rejoint la partie d'avant.
+  assert.deepEqual(splitParts(127, 61, 180), [
+    { start: 0, end: 61 },
+    { start: 61, end: 127 },
+  ]);
+  // Sauf si la partie fusionnée dépasserait la durée maximale d'un clip.
+  assert.equal(splitParts(185, 180, 180).length, 2);
+  assert.deepEqual(splitParts(30, 61, 180), [{ start: 0, end: 30 }]);
+  assert.deepEqual(splitParts(0, 61, 180), []);
 });

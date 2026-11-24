@@ -31,6 +31,8 @@ from render import (build_ass, build_srt, keep_intervals, loud_peaks, remap_word
 
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
 MAX_HOURS = float(os.environ.get("MAX_SOURCE_HOURS", "8"))
+# Espace minimum à laisser libre sur le serveur, tous comptes confondus (même réglage dans web/lib/storage.ts).
+MIN_FREE_BYTES = float(os.environ.get("MIN_FREE_GB") or 20) * 1024**3
 MAX_ATTEMPTS = 3
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL") or "claude-opus-5-5"
@@ -80,6 +82,22 @@ def probe_duration(file: Path) -> float:
         raise Fatal("Fichier vidéo illisible.")
 
 
+def check_disk():
+    if shutil.disk_usage(DATA).free < MIN_FREE_BYTES:
+        raise Fatal("Le serveur est presque plein : réessaie plus tard.")
+
+
+def free_quota(conn, user_id: str, source_id: str = "") -> int:
+    """Octets encore disponibles dans le quota de l'utilisateur (sources et clips, sans compter `source_id`)."""
+    row = conn.execute(
+        'SELECT u."storageQuotaGb" * 1024.0 ^ 3 '
+        '- COALESCE((SELECT SUM("sizeBytes") FROM "Source" WHERE "userId" = u.id AND id <> %s), 0) '
+        '- COALESCE((SELECT SUM("sizeBytes") FROM "Clip" WHERE "userId" = u.id), 0) AS free FROM "User" u WHERE u.id = %s',
+        [source_id, user_id],
+    ).fetchone()
+    return int(row["free"]) if row else 0
+
+
 def check_duration(seconds: float):
     if seconds > MAX_HOURS * 3600:
         raise Fatal(f"Vidéo trop longue : {seconds / 3600:.1f} h (maximum {MAX_HOURS:g} h).")
@@ -117,6 +135,7 @@ def ingest(conn, job):
     src = conn.execute('SELECT * FROM "Source" WHERE id = %s', [job["payload"]["sourceId"]]).fetchone()
     if src is None:  # supprimée entre-temps
         return
+    check_disk()
     folder = DATA / src["userId"] / "sources" / src["id"]
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +156,8 @@ def ingest(conn, job):
             "quiet": True,
             "no_warnings": True,
             "progress_hooks": [hook],
+            # shortcut: yt-dlp ne respecte la limite que si le site annonce la taille ; la vérification après coup reste.
+            "max_filesize": max(1, free_quota(conn, src["userId"], src["id"])),
         }
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
@@ -147,7 +168,9 @@ def ingest(conn, job):
         except yt_dlp.utils.DownloadError as e:
             # Réessayable : peut être une coupure réseau passagère.
             raise RuntimeError(f"Téléchargement impossible. Vérifie l'URL et que la vidéo est publique. Détail : {e}")
-        file = next(p for p in folder.glob("source.*") if p.suffix != ".part")
+        file = next((p for p in folder.glob("source.*") if p.suffix != ".part"), None)
+        if file is None:  # yt-dlp a refusé le fichier, trop lourd pour le quota restant
+            raise Fatal("Vidéo trop lourde pour l'espace qu'il te reste. Supprime des sources ou des clips, puis réessaie.")
         conn.execute('UPDATE "Source" SET status = %s WHERE id = %s', ["analyzing", src["id"]])
     else:
         file = DATA / src["filePath"]
@@ -159,13 +182,8 @@ def ingest(conn, job):
     run_ffmpeg(proxy_cmd(file, proxy), duration, progress, 70, 100)
 
     size = file.stat().st_size + proxy.stat().st_size
-    row = conn.execute(
-        'SELECT COALESCE(SUM(s."sizeBytes"), 0) AS used, MAX(u."storageQuotaGb") AS quota '
-        'FROM "User" u LEFT JOIN "Source" s ON s."userId" = u.id AND s.id <> %s WHERE u.id = %s',
-        [src["id"], src["userId"]],
-    ).fetchone()
-    if int(row["used"]) + size > row["quota"] * 1024**3:
-        raise Fatal("Quota de stockage dépassé. Supprime des sources pour continuer.")
+    if size > free_quota(conn, src["userId"], src["id"]):
+        raise Fatal("Quota de stockage dépassé. Supprime des sources ou des clips pour continuer.")
 
     updated = conn.execute(
         'UPDATE "Source" SET status = %s, duration = %s, "sizeBytes" = %s, "filePath" = %s, "proxyPath" = %s, error = NULL WHERE id = %s',
@@ -279,6 +297,7 @@ def track_face(video: Path, start: float, duration: float, on_progress) -> list[
 
 def render(conn, job):
     """Produit un clip vertical à partir des réglages de Clip.edit (voir web/lib/edit.ts)."""
+    check_disk()
     clip = conn.execute(
         'SELECT c.*, s."filePath", s."proxyPath" FROM "Clip" c JOIN "Source" s ON s.id = c."sourceId" WHERE c.id = %s',
         [job["payload"]["clipId"]],
@@ -338,19 +357,22 @@ def render(conn, job):
     has_ass = subtitles or bool(hook.strip()) or bool(watermark.strip())
     if has_ass:
         (folder / "subs.ass").write_text(
-            build_ass(timed if subtitles else [], edit.get("subStyle"), hook, watermark, out_duration), encoding="utf-8")
+            build_ass(timed if subtitles else [], edit.get("subStyle"), hook, watermark, out_duration,
+                      hook_full=bool(edit.get("hookFull"))), encoding="utf-8")
     if subtitles:
         (folder / "clip.srt").write_text(build_srt(timed), encoding="utf-8")
 
     voice = voice_track(timed, language, out_duration, folder) if edit.get("voice") and words else None
     music = DATA / clip["userId"] / "music" / Path(edit.get("music") or "-").name
-    stack = None
+    stack, stack_start = None, 0.0
     if edit.get("stackSourceId") and edit.get("crop") != "split":
-        row = conn.execute('SELECT "filePath" FROM "Source" WHERE id = %s AND "userId" = %s AND status = %s',
+        row = conn.execute('SELECT "filePath", duration FROM "Source" WHERE id = %s AND "userId" = %s AND status = %s',
                            [edit["stackSourceId"], clip["userId"], "ready"]).fetchone()
         if row is None:
             raise Fatal("La vidéo secondaire n'existe plus. Choisis-en une autre.")
         stack = str(DATA / row["filePath"])
+        # Parties d'une même vidéo : chacune reprend la vidéo secondaire là où le temps de la source l'amène.
+        stack_start = clip["start"] % row["duration"] if row["duration"] else 0
     has_audio = bool(subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(source)],
         capture_output=True, text=True,
@@ -359,7 +381,8 @@ def render(conn, job):
     output = folder / "clip.mp4"
     cmd = render_cmd(source, output, start, duration, (w, h), fps, edit, points,
                      ass="subs.ass" if has_ass else None, keep=keep, zooms=zooms, voice=voice,
-                     music=str(music) if music.is_file() else None, stack=stack, source_audio=has_audio)
+                     music=str(music) if music.is_file() else None, stack=stack, stack_start=stack_start,
+                     source_audio=has_audio)
     # cwd = dossier du clip : le filtre `ass` reçoit un simple nom de fichier, sans caractères à échapper.
     run_ffmpeg(cmd, out_duration, progress, 55, 100, cwd=folder)
     (folder / "voice.wav").unlink(missing_ok=True)
@@ -399,33 +422,49 @@ def youtube_heatmap(url: str) -> list[tuple[float, float, float]]:
     return [(h["start_time"], h["end_time"], h["value"]) for h in info.get("heatmap") or []]
 
 
+def http_json(url: str, params: dict | None = None, headers: dict | None = None, post: bool = False) -> dict:
+    query = urllib.parse.urlencode(params or {})
+    target = url if post or not query else f"{url}?{query}"
+    request = urllib.request.Request(target, data=query.encode() if post else None, headers=headers or {})
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.load(response)
+
+
+def twitch_configured() -> bool:
+    return bool(os.environ.get("TWITCH_CLIENT_ID") and os.environ.get("TWITCH_CLIENT_SECRET"))
+
+
+_twitch_token = {"value": "", "expires": 0.0}
+
+
+def helix(path: str, params: dict) -> list[dict]:
+    """Appel à l'API Twitch Helix avec un jeton d'application, gardé jusqu'à son expiration."""
+    client_id = os.environ["TWITCH_CLIENT_ID"]
+    if time.time() > _twitch_token["expires"]:
+        token = http_json("https://id.twitch.tv/oauth2/token", {
+            "client_id": client_id, "client_secret": os.environ["TWITCH_CLIENT_SECRET"], "grant_type": "client_credentials",
+        }, post=True)
+        _twitch_token.update(value=token["access_token"], expires=time.time() + token["expires_in"] - 300)
+    return http_json(f"https://api.twitch.tv/helix/{path}", params, {"Client-Id": client_id, "Authorization": f"Bearer {_twitch_token['value']}"})["data"]
+
+
 def twitch_clips(url: str) -> list[tuple[float, float, float]] | None:
     """Clips créés par les viewers sur une VOD Twitch, via l'API officielle Helix : (début, fin, poids).
 
     None si TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET ne sont pas configurés ou si l'URL n'est pas une VOD.
     """
-    client_id, secret = os.environ.get("TWITCH_CLIENT_ID"), os.environ.get("TWITCH_CLIENT_SECRET")
     vod = re.search(r"/videos/(\d+)", url)
-    if not client_id or not secret or not vod:
+    if not twitch_configured() or not vod:
         return None
-
-    def call(target: str, params: dict, headers: dict | None = None, post: bool = False) -> dict:
-        query = urllib.parse.urlencode(params)
-        request = urllib.request.Request(target if post else f"{target}?{query}", data=query.encode() if post else None, headers=headers or {})
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.load(response)
-
-    token = call("https://id.twitch.tv/oauth2/token", {"client_id": client_id, "client_secret": secret, "grant_type": "client_credentials"}, post=True)
-    auth = {"Client-Id": client_id, "Authorization": f"Bearer {token['access_token']}"}
-    videos = call("https://api.twitch.tv/helix/videos", {"id": vod.group(1)}, auth)["data"]
+    videos = helix("videos", {"id": vod.group(1)})
     if not videos:
         return []
     created = datetime.fromisoformat(videos[0]["created_at"].replace("Z", "+00:00"))
     # Les clips sont filtrés par date de création : on prend la semaine qui suit le début du live.
-    clips = call("https://api.twitch.tv/helix/clips", {
+    clips = helix("clips", {
         "broadcaster_id": videos[0]["user_id"], "first": 100,
         "started_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"), "ended_at": (created + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }, auth)["data"]
+    })
     return [
         (c["vod_offset"], c["vod_offset"] + c["duration"], math.log1p(c["view_count"]))
         for c in clips if c.get("video_id") == vod.group(1) and c.get("vod_offset") is not None
@@ -682,7 +721,8 @@ def publish(conn, job):
 
     file = DATA / pub["outputPath"]
     if pub["provider"] == "youtube":
-        result = networks.youtube(token, file, pub["title"], pub["description"])
+        result = networks.youtube(token, file, pub["title"], pub["description"], cover=DATA / pub["userId"] / "clips" / pub["clipId"] / "cover.jpg",
+                                  kids=bool(pub["madeForKids"]))
     elif pub["provider"] == "tiktok":
         result = networks.tiktok(token, file, pub["description"], draft=bool(pub["tiktokSound"].strip()))
     else:
@@ -736,9 +776,76 @@ def purge(conn):
         shutil.rmtree(DATA / source["userId"] / "sources" / source["id"], ignore_errors=True)
         conn.execute('UPDATE "Source" SET status = %s, "filePath" = NULL, "proxyPath" = NULL, "sizeBytes" = 0 WHERE id = %s', ["purged", source["id"]])
         print(f"Source {source['id']} purgée.", flush=True)
+    # Envois abandonnés depuis plus d'un jour : ils comptent dans le quota tant qu'ils existent.
+    for part in DATA.glob("*/uploads/*.part"):
+        if time.time() - part.stat().st_mtime > 24 * 3600:
+            part.unlink(missing_ok=True)
 
 
 HANDLERS = {"ingest": ingest, "render": render, "analyze": analyze, "publish": publish, "stats": stats}
+
+
+RECO_KEEP = 30  # clips gardés par niche et par relevé
+PERIOD_DAYS = {"day": 1, "week": 7}
+
+
+def utc(text: str) -> datetime:
+    """Date ISO en UTC sans fuseau, comme les colonnes timestamp de Prisma."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def niche_clips(niche: dict) -> list[dict]:
+    """Clips les plus vus d'une catégorie Twitch ou Kick sur la période de la niche."""
+    if niche["platform"] == "twitch":
+        if not twitch_configured():
+            raise Fatal("Twitch n'est pas encore configuré sur Hooklip.")
+        since = datetime.now(timezone.utc) - timedelta(days=PERIOD_DAYS.get(niche["period"], 1))
+        # Helix renvoie les clips de la période les plus vus d'abord ; la langue est celle de la chaîne.
+        clips = helix("clips", {"game_id": niche["categoryId"], "first": 100, "started_at": since.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        return [{
+            "externalId": c["id"], "url": c["url"], "title": c["title"], "channel": c["broadcaster_name"], "views": c["view_count"],
+            "seconds": c["duration"], "thumbnailUrl": c["thumbnail_url"], "language": c.get("language") or "", "clipCreatedAt": utc(c["created_at"]),
+        } for c in clips if not niche["language"] or c.get("language") == niche["language"]]
+
+    # shortcut: API non documentée du site Kick. L'API officielle n'expose pas les clips.
+    slug = urllib.parse.quote(niche["categoryId"])
+    data = http_json(f"https://kick.com/api/v2/categories/{slug}/clips", {"sort": "view", "time": niche["period"]},
+                     {"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    return [{
+        "externalId": c["id"], "url": f'https://kick.com/{c["channel"]["slug"]}/clips/{c["id"]}', "title": c["title"],
+        "channel": c["channel"]["username"], "views": c.get("view_count") or c.get("views") or 0, "seconds": c["duration"],
+        "thumbnailUrl": c.get("thumbnail_url") or "", "language": "", "clipCreatedAt": utc(c["created_at"]),
+    } for c in data.get("clips", []) if c.get("privacy", "public") == "public" and c.get("channel")]
+
+
+def recommend(conn):
+    """Relève les niches dont le dernier passage date de plus de `everyHours` heures."""
+    due = conn.execute(
+        f'SELECT * FROM "Niche" WHERE "fetchedAt" IS NULL OR "fetchedAt" < {NOW} - "everyHours" * interval \'1 hour\' '
+        'ORDER BY "fetchedAt" NULLS FIRST LIMIT 5'
+    ).fetchall()
+    for niche in due:
+        try:
+            clips = sorted(niche_clips(niche), key=lambda c: -c["views"])[:RECO_KEEP]
+            error = None
+        except Fatal as e:
+            clips, error = [], str(e)
+        except Exception as e:
+            traceback.print_exc()
+            clips, error = [], f"{niche['platform'].capitalize()} n'a pas répondu ({type(e).__name__}). Nouvel essai au prochain relevé."
+        for c in clips:
+            conn.execute(
+                'INSERT INTO "Recommendation" (id, "userId", "nicheId", platform, "externalId", url, title, channel, views, seconds, '
+                '"thumbnailUrl", language, "clipCreatedAt", "fetchedAt") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, ' + NOW + ') '
+                'ON CONFLICT ("userId", platform, "externalId") DO UPDATE SET views = EXCLUDED.views, title = EXCLUDED.title, '
+                '"fetchedAt" = EXCLUDED."fetchedAt"',
+                [uuid.uuid4().hex, niche["userId"], niche["id"], niche["platform"], c["externalId"], c["url"], c["title"][:300],
+                 c["channel"][:100], int(c["views"]), float(c["seconds"]), c["thumbnailUrl"], c["language"], c["clipCreatedAt"]],
+            )
+        conn.execute(f'UPDATE "Niche" SET "fetchedAt" = {NOW}, error = %s WHERE id = %s', [error, niche["id"]])
+        print(f"Niche {niche['id']} : {error or f'{len(clips)} clips.'}", flush=True)
+    # Un clip qui n'est plus remonté depuis une semaine n'est plus d'actualité (les importés restent).
+    conn.execute(f'DELETE FROM "Recommendation" WHERE status <> \'imported\' AND "fetchedAt" < {NOW} - interval \'7 days\'')
 
 
 def run(conn, job):
@@ -784,8 +891,15 @@ def main():
         # dont "updatedAt" est vieux (worker mort), pas tous les jobs en cours.
         conn.execute("UPDATE \"Job\" SET status = 'queued' WHERE status = 'running'")
         print("Worker prêt.", flush=True)
-        last_purge = 0.0
+        last_purge = last_reco = 0.0
         while True:
+            # Chaque minute : une niche est-elle due ? « Actualiser » dans le site remet fetchedAt à vide.
+            if time.time() - last_reco > 60:
+                last_reco = time.time()
+                try:
+                    recommend(conn)
+                except Exception:
+                    traceback.print_exc()
             if time.time() - last_purge > float(os.environ.get("PURGE_EVERY_SECONDS", "600")):
                 last_purge = time.time()
                 try:

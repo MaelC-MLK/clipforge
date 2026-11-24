@@ -2,11 +2,11 @@
 
 import { useRouter } from "next/navigation";
 import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
-import { CROPS, DEFAULT_EDIT, type Edit, FONTS, keyframeX, POSITIONS, PRESETS, type Word } from "@/lib/edit";
+import { CROPS, DEFAULT_EDIT, type Edit, FONTS, keyframeX, MAX_PARTS, MIN_PART_SECONDS, POSITIONS, PRESETS, splitParts, type Word } from "@/lib/edit";
 import type { SourceState } from "@/lib/storage";
 import { MAX_CLIP_SECONDS, MUSIC_EXT } from "@/lib/upload";
 import { Moments } from "./moments";
-import { createClip, createClipsBatch, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate } from "../../../actions";
+import { createClip, createClipsBatch, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate, splitSource } from "../../../actions";
 
 const CROP_LABELS: Record<(typeof CROPS)[number], string> = {
   face: "Suivi automatique du visage",
@@ -65,6 +65,52 @@ const PW = 540; // l'aperçu est dessiné en 540x960, la moitié du rendu final
 const PH = 960;
 
 /** Aperçu vertical approximatif, dessiné à partir de la vidéo basse résolution en cours de lecture. */
+/** Découpe toute la vidéo en parties de même durée, avec les réglages de l'éditeur. */
+function AutoSplit({ duration, pending, onSplit }: { duration: number; pending: boolean; onSplit: (seconds: number, numbered: boolean) => void }) {
+  const [seconds, setSeconds] = useState(61);
+  const [numbered, setNumbered] = useState(true);
+  const valid = seconds >= MIN_PART_SECONDS && seconds <= MAX_CLIP_SECONDS;
+  const parts = valid ? splitParts(duration, seconds, MAX_CLIP_SECONDS) : [];
+  return (
+    <Section title="Découpage automatique">
+      <p className="text-sm text-zinc-400">
+        Coupe toute la vidéo en parties de même durée, prêtes à publier. Chaque partie reprend les réglages ci-dessous : cadrage, vidéo
+        secondaire (gameplay, vidéo satisfaisante…), sous-titres, accroche, musique.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="partSeconds">
+            Durée d&apos;une partie (secondes)
+          </label>
+          <input
+            id="partSeconds"
+            type="number"
+            min={MIN_PART_SECONDS}
+            max={MAX_CLIP_SECONDS}
+            value={seconds}
+            onChange={(e) => setSeconds(Number(e.target.value))}
+            className="input"
+          />
+          <p className="mt-1 text-xs text-zinc-500">61 s : juste au-dessus de la minute, utile pour la monétisation TikTok.</p>
+        </div>
+        <div className="self-center">
+          <Check label="Ajouter « Partie 1, 2… » à l'accroche" checked={numbered} onChange={setNumbered} />
+        </div>
+      </div>
+      <p className={`text-sm ${valid && parts.length <= MAX_PARTS ? "text-zinc-300" : "text-red-400"}`}>
+        {!valid
+          ? `Entre ${MIN_PART_SECONDS} et ${MAX_CLIP_SECONDS} secondes.`
+          : parts.length > MAX_PARTS
+            ? `${parts.length} parties : ${MAX_PARTS} au plus, choisis une durée plus longue.`
+            : `${parts.length} partie${parts.length > 1 ? "s" : ""} de ${clock(parts[0]?.end ?? 0)}${parts.length > 1 ? ` (dernière : ${clock(parts[parts.length - 1].end - parts[parts.length - 1].start)})` : ""}.`}
+      </p>
+      <button className="btn" disabled={pending || !valid || parts.length === 0 || parts.length > MAX_PARTS} onClick={() => onSplit(seconds, numbered)}>
+        {pending ? "Envoi…" : "Découper toute la vidéo"}
+      </button>
+    </Section>
+  );
+}
+
 function Preview(props: { video: RefObject<HTMLVideoElement | null>; edit: Edit; start: number; end: number; manualX: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const second = useRef<HTMLVideoElement>(null);
@@ -116,7 +162,7 @@ function Preview(props: { video: RefObject<HTMLVideoElement | null>; edit: Edit;
         ctx.fillText(edit.watermark, PW - 20, 40);
         ctx.textAlign = "center";
       }
-      if (edit.hook.trim() && t >= 0 && t < 3) {
+      if (edit.hook.trim() && t >= 0 && (edit.hookFull || t < 3)) {
         ctx.font = font(34);
         const width = Math.min(ctx.measureText(edit.hook).width + 30, PW - 40);
         ctx.fillStyle = "#fff";
@@ -329,6 +375,8 @@ export function Editor({
             if (video.current) video.current.currentTime = c.start;
           }}
         />
+
+        <AutoSplit duration={duration} pending={pending} onSplit={(seconds, numbered) => run(() => splitSource({ sourceId, seconds, numbered, edit }))} />
 
         <Section title="Découpe" open>
           <div className="grid grid-cols-2 gap-4">
@@ -554,10 +602,11 @@ export function Editor({
         <Section title="Extras">
           <div>
             <label className="label" htmlFor="hook">
-              Accroche (affichée les 3 premières secondes)
+              Accroche ou titre (en haut de la vidéo)
             </label>
             <input id="hook" value={edit.hook} onChange={(e) => set("hook", e.target.value)} maxLength={80} placeholder="Il ne s'attendait pas à ça…" className="input" />
           </div>
+          <Check label="Afficher le titre pendant toute la vidéo (sinon 3 secondes)" checked={edit.hookFull} onChange={(v) => set("hookFull", v)} />
           <div>
             <label className="label" htmlFor="watermark">
               Filigrane (texte en haut à droite)

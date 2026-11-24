@@ -16,6 +16,8 @@ export type ClipMeta = {
   viralReason: string;
 };
 
+export const PROVIDER_DOTS: Record<Provider, string> = { youtube: "bg-red-500", tiktok: "bg-cyan-400", instagram: "bg-pink-500" };
+
 export const STATUS_LABELS: Record<string, string> = {
   scheduled: "En attente",
   publishing: "Publication en cours",
