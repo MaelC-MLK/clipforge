@@ -1,4 +1,4 @@
-"""Publication d'un clip sur YouTube, TikTok ou Instagram, par leurs API officielles.
+"""Publication d'un clip sur YouTube, TikTok, Instagram ou X, par leurs API officielles.
 
 Écrit d'après les documentations officielles de novembre 2026 (adresses dans le README).
 Chaque fonction de publication renvoie (statut, lien du post ou None, note ou None, identifiant du post ou None).
@@ -58,6 +58,13 @@ def refresh(provider: str, access_token: str, refresh_token: str | None) -> tupl
         if "access_token" not in data:
             raise Refused("TikTok ne reconnaît plus l'autorisation. Reconnecte ce compte dans Réseaux.")
         # TikTok change aussi le jeton de renouvellement à chaque fois : l'ancien devient inutilisable.
+        return data["access_token"], data.get("refresh_token", refresh_token), data.get("expires_in", 7200)
+    if provider == "x":
+        data = check(requests.post(api("api.x.com", "/2/oauth2/token"), timeout=TIMEOUT,
+                                   auth=(os.environ.get("X_CLIENT_ID", ""), os.environ.get("X_CLIENT_SECRET", "")),
+                                   data={"grant_type": "refresh_token", "refresh_token": refresh_token,
+                                         "client_id": os.environ.get("X_CLIENT_ID")}), "X").json()
+        # Comme TikTok, X remplace le jeton de renouvellement à chaque usage.
         return data["access_token"], data.get("refresh_token", refresh_token), data.get("expires_in", 7200)
     data = check(requests.get(api("graph.instagram.com", "/refresh_access_token"), timeout=TIMEOUT,
                               params={"grant_type": "ig_refresh_token", "access_token": access_token}), "Instagram").json()
@@ -209,6 +216,36 @@ def instagram(token: str, user_id: str, video_url: str, caption: str):
     except (requests.RequestException, ValueError):
         link = None  # publié quand même : seul le lien manque
     return "published", link, None, media
+
+
+X_CHUNK = 4 * MB
+
+
+def x(token: str, file: Path, text: str):
+    """Envoi de la vidéo par morceaux (API média v2), attente du traitement, puis le post avec la vidéo jointe."""
+    auth = {"Authorization": f"Bearer {token}"}
+    size = file.stat().st_size
+    media = check(requests.post(api("api.x.com", "/2/media/upload/initialize"), timeout=TIMEOUT, headers=auth,
+                                json={"media_type": "video/mp4", "total_bytes": size, "media_category": "tweet_video"}), "X").json()["data"]["id"]
+    with file.open("rb") as f:
+        for index in range((size + X_CHUNK - 1) // X_CHUNK):
+            check(requests.post(api("api.x.com", f"/2/media/upload/{media}/append"), timeout=600, headers=auth,
+                                data={"segment_index": index}, files={"media": f.read(X_CHUNK)}), "X")
+    info = (check(requests.post(api("api.x.com", f"/2/media/upload/{media}/finalize"), timeout=TIMEOUT, headers=auth), "X")
+            .json().get("data", {}).get("processing_info"))
+    for _ in range(60):
+        if not info or info.get("state") == "succeeded":
+            break
+        if info.get("state") == "failed":
+            raise Refused(f"X n'a pas pu traiter la vidéo : {(info.get('error') or {}).get('message', 'raison inconnue')}.")
+        time.sleep(float(os.environ.get("POLL_SECONDS", str(info.get("check_after_secs", 5)))))
+        info = (check(requests.get(api("api.x.com", "/2/media/upload"), timeout=TIMEOUT, headers=auth,
+                                   params={"command": "STATUS", "media_id": media}), "X").json().get("data", {}).get("processing_info"))
+    else:
+        raise RuntimeError("X n'a pas fini de traiter la vidéo. Nouvelle tentative plus tard.")
+    post = check(requests.post(api("api.x.com", "/2/tweets"), timeout=TIMEOUT, headers=auth,
+                               json={"text": text[:280], "media": {"media_ids": [media]}}), "X").json()["data"]["id"]
+    return "published", f"https://x.com/i/web/status/{post}", None, post
 
 
 def youtube_stats(token: str, ids: list[str]) -> dict[str, tuple[int | None, int | None]]:

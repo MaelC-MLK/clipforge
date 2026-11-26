@@ -26,6 +26,7 @@ export function PublishForm(props: {
     instagram: m ? caption({ ...m.reels, description: `${m.reels.title}\n${m.reels.description}` }) : props.clipTitle,
     youtubeTitle: m ? m.shorts.title.slice(0, 100) : props.clipTitle.slice(0, 100),
     youtubeDescription: m ? caption(m.shorts) : "",
+    x: (m ? caption({ ...m.shorts, description: m.shorts.title }) : props.clipTitle).slice(0, 280),
   });
   const [texts, setTexts] = useState(() => fromMeta(props.initialMeta));
   const [selected, setSelected] = useState<string[]>([]);
@@ -89,6 +90,7 @@ export function PublishForm(props: {
         {field("instagram", "Instagram Reels : légende", 4, 2200)}
         {field("youtubeTitle", "YouTube Shorts : titre (100 caractères au plus)", 1, 100)}
         {field("youtubeDescription", "YouTube Shorts : description", 4, 4000)}
+        {props.accounts.some((a) => a.provider === "x") && field("x", `X : texte du post (${texts.x.length} / 280)`, 3, 280)}
       </section>
 
       <section className="card space-y-3">

@@ -248,7 +248,7 @@ export function Calendar({ items }: { items: Item[] }) {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-xs text-zinc-500">Heure en gris : en attente. Vert : publié. Jaune : brouillon TikTok à finir. Rouge : échec. Pastille : rouge YouTube, bleue TikTok, rose Instagram. Clique sur une publication pour la modifier ou l&apos;annuler.</p>
+          <p className="mt-2 text-xs text-zinc-500">Heure en gris : en attente. Vert : publié. Jaune : brouillon TikTok à finir. Rouge : échec. Pastille : rouge YouTube, bleue TikTok, rose Instagram, blanche X. Clique sur une publication pour la modifier ou l&apos;annuler.</p>
         </div>
       )}
 

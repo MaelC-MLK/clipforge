@@ -287,6 +287,21 @@ export async function deleteClip(id: string) {
   if (count) await rm(abs(`${user.id}/clips/${id}`), { recursive: true, force: true });
 }
 
+/** Arrête tous les rendus en cours (d'une source, ou de tout le compte). Le worker voit son job disparaître et s'arrête.
+ * Un clip jamais publié est supprimé ; un clip qui a des publications est gardé, en erreur « Rendu annulé ». */
+export async function cancelRenders(sourceId?: string) {
+  const user = await requireUser();
+  const where = { userId: user.id, status: "rendering", ...(sourceId ? { sourceId: String(sourceId) } : {}) };
+  const clips = await db.clip.findMany({ where, select: { id: true, _count: { select: { publications: true } } } });
+  const drop = clips.filter((c) => c._count.publications === 0).map((c) => c.id);
+  const keep = clips.filter((c) => c._count.publications > 0).map((c) => c.id);
+  await db.job.deleteMany({ where: { userId: user.id, type: "render", clipId: { in: keep } } });
+  await db.clip.updateMany({ where: { id: { in: keep }, userId: user.id }, data: { status: "error", error: "Rendu annulé." } });
+  await db.clip.deleteMany({ where: { id: { in: drop }, userId: user.id } });
+  await Promise.all(drop.map((id) => rm(abs(`${user.id}/clips/${id}`), { recursive: true, force: true })));
+  return clips.length;
+}
+
 export async function deleteMusic(name: string) {
   const user = await requireUser();
   // Seulement un nom présent dans sa bibliothèque : jamais de chemin fourni par le navigateur.
@@ -353,7 +368,7 @@ export async function schedulePublications(input: {
   clipId: string;
   accountIds: string[];
   when: string;
-  texts: { tiktok: string; instagram: string; youtubeTitle: string; youtubeDescription: string };
+  texts: { tiktok: string; instagram: string; youtubeTitle: string; youtubeDescription: string; x?: string };
   tiktokSound: string;
   madeForKids?: boolean;
 }): Promise<FormState> {
@@ -397,7 +412,11 @@ export async function schedulePublications(input: {
         scheduledAt,
         title: account.provider === "youtube" ? text(input.texts?.youtubeTitle, 100) || clip.title.slice(0, 100) : "",
         description:
-          account.provider === "youtube" ? text(input.texts?.youtubeDescription, 4000) : text(account.provider === "tiktok" ? input.texts?.tiktok : input.texts?.instagram, 2200),
+          account.provider === "youtube"
+            ? text(input.texts?.youtubeDescription, 4000)
+            : account.provider === "x"
+              ? text(input.texts?.x, 280)
+              : text(account.provider === "tiktok" ? input.texts?.tiktok : input.texts?.instagram, 2200),
         tiktokSound: account.provider === "tiktok" ? sound : "",
         madeForKids: account.provider === "youtube" && input.madeForKids === true,
       },

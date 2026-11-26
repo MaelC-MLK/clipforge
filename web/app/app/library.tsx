@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useActionState, useEffect, useRef, useState } from "react";
 import type { LibraryState } from "@/lib/storage";
 import { MAX_CLIP_SECONDS, uploadVideo, VIDEO_EXT } from "@/lib/upload";
-import { deleteClip, deleteSource, importUrl, prepareFinal, publishSource } from "../actions";
+import { cancelRenders, deleteClip, deleteSource, importUrl, prepareFinal, publishSource } from "../actions";
+import { ConfirmButton } from "./confirm-button";
 
 const STATUS: Record<string, string> = {
   downloading: "Téléchargement",
@@ -56,6 +57,7 @@ export function Library({ initial, view }: { initial: LibraryState; view: "sourc
   }, []);
 
   const raw = sources.filter((s) => !s.final);
+  const rendering = clips.filter((c) => c.status === "rendering").length;
   // Vidéo finale encore sans clip : en cours d'import, en erreur, ou tout juste prête.
   const pending = sources.filter((s) => s.final && !clips.some((c) => c.sourceId === s.id));
 
@@ -101,6 +103,11 @@ export function Library({ initial, view }: { initial: LibraryState; view: "sourc
             <h1 className="page-title">Vidéos prêtes</h1>
             <p className="mt-1 text-sm text-zinc-400">Tous tes clips rendus, à publier, programmer ou télécharger.</p>
           </div>
+          {rendering > 0 && (
+            <ConfirmButton confirm={`Annuler ${rendering} rendu${rendering > 1 ? "s" : ""} ?`} onConfirm={() => cancelRenders()}>
+              Annuler tous les rendus ({rendering})
+            </ConfirmButton>
+          )}
           <Link href="/app/fast" className="btn">
             Nouveau fast clip
           </Link>
@@ -236,17 +243,20 @@ export function Library({ initial, view }: { initial: LibraryState; view: "sourc
                     <Link href={`/app/sources/${c.sourceId}`} className="btn-ghost">
                       Monter
                     </Link>
-                    <button
-                      className="btn-ghost"
-                      onClick={() => {
-                        if (!confirm(`Supprimer « ${c.title} » ? Ses publications planifiées et son historique disparaissent aussi.`)) return;
+                    {c.status === "rendering" && c.posts === 0 && !c.fromFinal ? (
+                      // Un rendu en cours se supprime d'un clic : rien n'est encore publié ni perdu.
+                      <button className="btn-ghost" onClick={() => deleteClip(c.id)}>
+                        Annuler le rendu
+                      </button>
+                    ) : (
+                      <ConfirmButton
+                        confirm={c.posts > 0 ? "Supprimer aussi ses publications ?" : "Confirmer la suppression"}
                         // Une vidéo importée déjà montée part avec sa source, sinon elle serait recréée.
-                        if (c.fromFinal) deleteSource(c.sourceId);
-                        else deleteClip(c.id);
-                      }}
-                    >
-                      Supprimer
-                    </button>
+                        onConfirm={() => (c.fromFinal ? deleteSource(c.sourceId) : deleteClip(c.id))}
+                      >
+                        Supprimer
+                      </ConfirmButton>
+                    )}
                   </div>
                   {playing === c.id && <video className="mx-auto mt-3 max-h-96 rounded-xl bg-black" src={`/api/clips/${c.id}/video`} controls autoPlay />}
                 </li>

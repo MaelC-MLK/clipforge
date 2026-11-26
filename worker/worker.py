@@ -58,6 +58,10 @@ class Fatal(Exception):
     """Erreur définitive : inutile de réessayer. Le message est affiché à l'utilisateur."""
 
 
+class Cancelled(Exception):
+    """Le job a disparu de la base (clip supprimé ou rendu annulé depuis le site) : on arrête tout."""
+
+
 def proxy_cmd(src: Path, dst: Path) -> list[str]:
     """Aperçu 480p léger pour la prévisualisation dans le navigateur."""
     return [
@@ -130,7 +134,9 @@ def make_progress(conn, job):
         percent = max(0, min(99, int(percent)))
         if percent != last:
             last = percent
-            conn.execute('UPDATE "Job" SET progress = %s, "updatedAt" = ' + NOW + " WHERE id = %s", [percent, job["id"]])
+            cur = conn.execute('UPDATE "Job" SET progress = %s, "updatedAt" = ' + NOW + " WHERE id = %s", [percent, job["id"]])
+            if cur.rowcount == 0:
+                raise Cancelled()
 
     return progress
 
@@ -138,12 +144,17 @@ def make_progress(conn, job):
 def run_ffmpeg(cmd: list[str], duration: float, progress, lo: float, hi: float, cwd: Path | None = None):
     """Lance FFmpeg et fait avancer la progression de `lo` à `hi`."""
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd)
-    for line in process.stdout:
-        if line.startswith("out_time_us=") and duration > 0:
-            try:
-                progress(lo + int(line.split("=")[1]) / 1e6 / duration * (hi - lo))
-            except ValueError:
-                pass  # "N/A" en début d'encodage
+    try:
+        for line in process.stdout:
+            if line.startswith("out_time_us=") and duration > 0:
+                try:
+                    progress(lo + int(line.split("=")[1]) / 1e6 / duration * (hi - lo))
+                except ValueError:
+                    pass  # "N/A" en début d'encodage
+    except Cancelled:
+        process.kill()
+        process.wait()
+        raise
     if process.wait() != 0:
         raise Fatal("FFmpeg n'a pas pu traiter cette vidéo : " + process.stderr.read()[-300:])
 
@@ -453,7 +464,7 @@ def render(conn, job):
     if has_ass:
         (folder / "subs.ass").write_text(
             build_ass(timed if subtitles else [], edit.get("subStyle"), hook, watermark, out_duration,
-                      hook_full=bool(edit.get("hookFull"))), encoding="utf-8")
+                      hook_full=bool(edit.get("hookFull")), hook_style=edit.get("hookStyle")), encoding="utf-8")
     if subtitles:
         (folder / "clip.srt").write_text(build_srt(timed), encoding="utf-8")
 
@@ -821,6 +832,8 @@ def publish(conn, job):
                                   kids=bool(pub["madeForKids"]))
     elif pub["provider"] == "tiktok":
         result = networks.tiktok(token, file, pub["description"], draft=bool(pub["tiktokSound"].strip()))
+    elif pub["provider"] == "x":
+        result = networks.x(token, file, pub["description"])
     else:
         url = f'{os.environ.get("APP_URL", "http://localhost:3000").rstrip("/")}/api/public/{pub["id"]}/{networks.public_token(pub["id"])}'
         result = networks.instagram(token, pub["accountExternalId"], url, pub["description"])
@@ -948,6 +961,12 @@ def run(conn, job):
     try:
         HANDLERS[job["type"]](conn, job)
         conn.execute(f'UPDATE "Job" SET status = %s, progress = 100, error = NULL, "updatedAt" = {NOW} WHERE id = %s', ["done", job["id"]])
+    except Cancelled:
+        print(f"Job {job['id']} annulé.", flush=True)
+        if job["type"] == "render" and job["clipId"]:
+            clip = conn.execute('SELECT "userId" FROM "Clip" WHERE id = %s', [job["clipId"]]).fetchone()
+            if clip is None:  # clip supprimé : ses fichiers partiels aussi
+                shutil.rmtree(DATA / job["userId"] / "clips" / job["clipId"], ignore_errors=True)
     except Exception as e:
         if isinstance(e, networks.Refused):
             e = Fatal(str(e))

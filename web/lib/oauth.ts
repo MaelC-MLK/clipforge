@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { Provider } from "./publish";
 
 /** Adresse publique du site, sans barre finale. Sert aux retours OAuth et à l'URL de vidéo donnée à Instagram. */
@@ -37,12 +37,26 @@ const CONFIG = {
     scope: "instagram_business_basic,instagram_business_content_publish",
     extra: {},
   },
+  x: {
+    id: process.env.X_CLIENT_ID,
+    secret: process.env.X_CLIENT_SECRET,
+    idParam: "client_id",
+    authorize: ["x.com", "/i/oauth2/authorize"],
+    token: ["api.x.com", "/2/oauth2/token"],
+    // offline.access : jeton de renouvellement ; media.write : envoi de la vidéo.
+    scope: "tweet.read tweet.write users.read media.write offline.access",
+    extra: { code_challenge_method: "S256" },
+  },
 } as const;
+
+/** PKCE, obligatoire chez X : un secret gardé dans un cookie, et son empreinte envoyée à l'autorisation. */
+export const pkceVerifier = () => randomBytes(32).toString("base64url");
+const pkceChallenge = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
 
 export const isConfigured = (p: Provider) => Boolean(CONFIG[p].id && CONFIG[p].secret);
 export const redirectUri = (p: Provider) => `${APP_URL}/api/oauth/${p}/callback`;
 
-export function authorizeUrl(p: Provider, state: string): string {
+export function authorizeUrl(p: Provider, state: string, verifier = ""): string {
   const c = CONFIG[p];
   const params = new URLSearchParams({
     [c.idParam]: c.id ?? "",
@@ -51,6 +65,7 @@ export function authorizeUrl(p: Provider, state: string): string {
     scope: c.scope,
     state,
     ...c.extra,
+    ...(p === "x" ? { code_challenge: pkceChallenge(verifier) } : {}),
   });
   return `${api(c.authorize[0], c.authorize[1])}?${params}`;
 }
@@ -68,21 +83,38 @@ export type Connected = { externalId: string; name: string; accessToken: string;
 const inSeconds = (s: unknown) => (Number(s) > 0 ? new Date(Date.now() + Number(s) * 1000) : null);
 
 /** Échange le code d'autorisation contre des jetons, puis lit l'identité du compte. */
-export async function connect(p: Provider, code: string): Promise<Connected> {
+export async function connect(p: Provider, code: string, verifier = ""): Promise<Connected> {
   const c = CONFIG[p];
   const token = await json(
     await fetch(api(c.token[0], c.token[1]), {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        // X : client confidentiel, identifiants en Basic plutôt que dans le corps.
+        ...(p === "x" ? { Authorization: `Basic ${Buffer.from(`${c.id}:${c.secret}`).toString("base64")}` } : {}),
+      },
       body: new URLSearchParams({
         [c.idParam]: c.id ?? "",
-        client_secret: c.secret ?? "",
+        ...(p === "x" ? { code_verifier: verifier } : { client_secret: c.secret ?? "" }),
         code,
         grant_type: "authorization_code",
         redirect_uri: redirectUri(p),
       }),
     }),
   );
+
+  if (p === "x") {
+    const access = String(token.access_token);
+    const me = await json(await fetch(api("api.x.com", "/2/users/me"), { headers: { Authorization: `Bearer ${access}` } }));
+    const data = me.data as { id: string; username: string };
+    return {
+      externalId: data.id,
+      name: `@${data.username}`,
+      accessToken: access,
+      refreshToken: token.refresh_token ? String(token.refresh_token) : null,
+      expiresAt: inSeconds(token.expires_in),
+    };
+  }
 
   if (p === "youtube") {
     const access = String(token.access_token);

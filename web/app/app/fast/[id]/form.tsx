@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { DEFAULT_EDIT, type Edit } from "@/lib/edit";
 import { fastClip } from "../../../actions";
+import { HookPreview, HookStyleFields } from "../../hook-style";
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -52,11 +53,7 @@ export function FastForm({ sourceId, title: initialTitle, duration, music }: { s
       {/* Aperçu approximatif : recadrage centré et position du texte, le rendu final se fait sur le serveur. */}
       <div className="relative mx-auto aspect-[9/16] w-56 overflow-hidden rounded-2xl bg-black shadow-xl shadow-violet-950/50 sm:w-64">
         <video src={`/api/sources/${sourceId}/video`} className="h-full w-full object-cover" muted autoPlay loop playsInline />
-        {edit.hook.trim() && (
-          <span className="absolute inset-x-4 top-[10%] mx-auto w-fit rounded-md bg-white px-2.5 py-1 text-center text-sm font-bold leading-tight text-black">
-            {edit.hook}
-          </span>
-        )}
+        <HookPreview text={edit.hook} style={edit.hookStyle} scale={240 / 1080} />
         {edit.subtitles && (
           <span className="absolute inset-x-0 bottom-[22%] text-center text-lg font-black text-white [text-shadow:0_2px_0_#000,0_0_8px_#000]">
             SOUS-<span style={{ color: edit.subStyle.color }}>TITRES</span>
@@ -95,6 +92,7 @@ export function FastForm({ sourceId, title: initialTitle, duration, music }: { s
             ]}
             onChange={(v) => set("hookFull", v === "full")}
           />
+          {edit.hook.trim() && <HookStyleFields value={edit.hookStyle} onChange={(v) => set("hookStyle", v)} />}
         </div>
 
         <div className="space-y-2">

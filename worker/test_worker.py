@@ -370,6 +370,47 @@ class PublishTest(unittest.TestCase):
         self.assertEqual(len(public_token("abc")), 64)
 
 
+    def test_x(self):
+        import tempfile
+
+        import publish
+
+        def reply(body, status=200):
+            r = mock.Mock(status_code=status, text="")
+            r.json.return_value = body
+            return r
+
+        calls = []
+
+        def post(url, **kw):
+            calls.append(url)
+            if url.endswith("/initialize"):
+                return reply({"data": {"id": "M1"}})
+            if url.endswith("/finalize"):
+                return reply({"data": {"processing_info": {"state": "pending", "check_after_secs": 0}}})
+            if url.endswith("/2/tweets"):
+                self.assertEqual(kw["json"], {"text": "a" * 280, "media": {"media_ids": ["M1"]}})
+                return reply({"data": {"id": "T9"}})
+            return reply({})
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"POLL_SECONDS": "0"}), \
+                mock.patch.object(publish.requests, "post", side_effect=post), \
+                mock.patch.object(publish.requests, "get", return_value=reply({"data": {"processing_info": {"state": "succeeded"}}})):
+            file = Path(d) / "clip.mp4"
+            file.write_bytes(b"0" * (publish.X_CHUNK + 10))
+            result = publish.x("tok", file, "a" * 300)
+        self.assertEqual(result, ("published", "https://x.com/i/web/status/T9", None, "T9"))
+        self.assertEqual(sum(u.endswith("/append") for u in calls), 2)  # deux morceaux
+
+
+class CancelTest(unittest.TestCase):
+    def test_job_disparu(self):
+        conn = mock.Mock()
+        conn.execute.return_value.rowcount = 0
+        with self.assertRaises(worker.Cancelled):
+            worker.make_progress(conn, {"id": "j"})(10)
+
+
 class RecommendTest(unittest.TestCase):
     def test_kick(self):
         data = {"clips": [
@@ -401,6 +442,16 @@ class HookTest(unittest.TestCase):
     def test_full_length(self):
         self.assertIn("Dialogue: 2,0:00:00.00,0:00:03.00,Hook", build_ass([], hook="Titre", duration=20))
         self.assertIn("Dialogue: 2,0:00:00.00,0:00:20.00,Hook", build_ass([], hook="Titre", duration=20, hook_full=True))
+
+    def test_hook_style(self):
+        ass = build_ass([], hook="Titre", duration=20)
+        self.assertIn("Style: Hook,Montserrat,84,&H00000000,&H00000000,&H00FFFFFF,", ass)
+        self.assertIn(",3,18,0,8,80,80,200,1", ass)  # cartouche en haut par défaut
+        ass = build_ass([], hook="Titre", duration=20,
+                        hook_style={"font": "Lato", "size": 120, "color": "#FF0000", "bg": "#00FF00", "box": False, "position": "bottom", "upper": True})
+        self.assertIn("Style: Hook,Lato,120,&H000000FF,&H000000FF,&H0000FF00,&H80000000,", ass)
+        self.assertIn(",1,10,2,2,80,80,300,1", ass)
+        self.assertIn("TITRE", ass)
 
 
 class SceneCutTest(unittest.TestCase):

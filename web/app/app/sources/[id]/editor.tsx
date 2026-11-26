@@ -5,8 +5,10 @@ import { type ReactNode, type RefObject, useEffect, useRef, useState } from "rea
 import { CROPS, DEFAULT_EDIT, type Edit, FONTS, keyframeX, MAX_PARTS, MIN_PART_SECONDS, POSITIONS, PRESETS, splitParts, type Word } from "@/lib/edit";
 import type { SourceState } from "@/lib/storage";
 import { MAX_CLIP_SECONDS, MUSIC_EXT } from "@/lib/upload";
+import { HookStyleFields } from "../../hook-style";
 import { Moments } from "./moments";
-import { createClip, createClipsBatch, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate, splitSource } from "../../../actions";
+import { ConfirmButton } from "../../confirm-button";
+import { cancelRenders, createClip, createClipsBatch, deleteClip, deleteMusic, deleteTemplate, getClipWords, rerenderClips, saveTemplate, splitSource } from "../../../actions";
 
 const CROP_LABELS: Record<(typeof CROPS)[number], string> = {
   face: "Suivi automatique du visage",
@@ -181,12 +183,23 @@ function Preview(props: { video: RefObject<HTMLVideoElement | null>; edit: Edit;
         ctx.textAlign = "center";
       }
       if (edit.hook.trim() && t >= 0 && (edit.hookFull || t < 3)) {
-        ctx.font = font(34);
-        const width = Math.min(ctx.measureText(edit.hook).width + 30, PW - 40);
-        ctx.fillStyle = "#fff";
-        ctx.fillRect((PW - width) / 2, 100, width, 56);
-        ctx.fillStyle = "#000";
-        ctx.fillText(edit.hook, PW / 2, 129, PW - 60);
+        const hs = edit.hookStyle ?? DEFAULT_EDIT.hookStyle;
+        const size = hs.size / 2;
+        const label = hs.upper ? edit.hook.toUpperCase() : edit.hook;
+        ctx.font = `bold ${size}px ${hs.font}, sans-serif`;
+        const y = hs.position === "top" ? 100 + size / 2 : hs.position === "middle" ? PH / 2 : PH - 150 - size / 2;
+        if (hs.box) {
+          const width = Math.min(ctx.measureText(label).width + size, PW - 40);
+          ctx.fillStyle = hs.bg;
+          ctx.fillRect((PW - width) / 2, y - size * 0.75, width, size * 1.5);
+        } else {
+          ctx.lineWidth = Math.max(2, size / 6);
+          ctx.lineJoin = "round";
+          ctx.strokeStyle = hs.bg;
+          ctx.strokeText(label, PW / 2, y, PW - 60);
+        }
+        ctx.fillStyle = hs.color;
+        ctx.fillText(label, PW / 2, y, PW - 60);
       }
       if (edit.subtitles) {
         const st = edit.subStyle;
@@ -622,11 +635,12 @@ export function Editor({
         <Section title="Extras">
           <div>
             <label className="label" htmlFor="hook">
-              Accroche ou titre (en haut de la vidéo)
+              Accroche ou titre à l&apos;écran
             </label>
             <input id="hook" value={edit.hook} onChange={(e) => set("hook", e.target.value)} maxLength={80} placeholder="Il ne s'attendait pas à ça…" className="input" />
           </div>
           <Check label="Afficher le titre pendant toute la vidéo (sinon 3 secondes)" checked={edit.hookFull} onChange={(v) => set("hookFull", v)} />
+          {edit.hook.trim() && <HookStyleFields value={edit.hookStyle ?? DEFAULT_EDIT.hookStyle} onChange={(v) => set("hookStyle", v)} />}
           <div>
             <label className="label" htmlFor="watermark">
               Filigrane (texte en haut à droite)
@@ -662,7 +676,7 @@ export function Editor({
               className="btn-ghost"
               disabled={!template}
               // Le cadrage propre à ce clip (images clés) n'est pas écrasé par le template.
-              onClick={() => template && setEdit({ ...template.edit, keyframes: edit.keyframes })}
+              onClick={() => template && setEdit({ ...DEFAULT_EDIT, ...template.edit, keyframes: edit.keyframes })}
             >
               Charger
             </button>
@@ -735,7 +749,17 @@ export function Editor({
       </div>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold">Clips</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">Clips</h2>
+          {clips.length > idle.length && (
+            <ConfirmButton
+              confirm={`Annuler ${clips.length - idle.length} rendu${clips.length - idle.length > 1 ? "s" : ""} ?`}
+              onConfirm={() => run(async () => ({ ok: `${await cancelRenders(sourceId)} rendu(s) annulé(s).` }))}
+            >
+              Annuler tous les rendus ({clips.length - idle.length})
+            </ConfirmButton>
+          )}
+        </div>
         {clips.length === 0 && <p className="text-sm text-zinc-500">Aucun clip pour cette source.</p>}
         <ul className="space-y-2">
           {clips.map((c) => (
@@ -793,9 +817,15 @@ export function Editor({
                     Refaire avec les réglages actuels
                   </button>
                 )}
-                <button className="btn-ghost" onClick={() => confirm(`Supprimer le clip « ${c.title} » ?`) && deleteClip(c.id)}>
-                  Supprimer
-                </button>
+                {c.status === "rendering" ? (
+                  <button className="btn-ghost" onClick={() => run(async () => (await deleteClip(c.id), { ok: "Rendu annulé." }))}>
+                    Annuler le rendu
+                  </button>
+                ) : (
+                  <ConfirmButton confirm="Confirmer la suppression" onConfirm={() => run(async () => (await deleteClip(c.id), { ok: "Clip supprimé." }))}>
+                    Supprimer
+                  </ConfirmButton>
+                )}
               </div>
               {editingWords === c.id && c.status === "rendered" && (
                 <WordsEditor

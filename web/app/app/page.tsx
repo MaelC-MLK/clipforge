@@ -49,7 +49,7 @@ export default async function HomePage() {
     working > 0 && { href: "/app/videos", text: `${working} import${working > 1 ? "s" : ""} ou rendu${working > 1 ? "s" : ""} en cours`, tone: "text-violet-300" },
     ready > 0 && { href: "/app/videos", text: `${ready} vidéo${ready > 1 ? "s" : ""} prête${ready > 1 ? "s" : ""}, jamais publiée${ready > 1 ? "s" : ""}`, tone: "text-emerald-300" },
     failed > 0 && { href: "/app/calendrier", text: `${failed} publication${failed > 1 ? "s" : ""} en échec`, tone: "text-red-400" },
-    accounts === 0 && { href: "/app/reseaux", text: "Aucun réseau connecté : connecte YouTube, TikTok ou Instagram", tone: "text-amber-300" },
+    accounts === 0 && { href: "/app/reseaux", text: "Aucun réseau connecté : connecte YouTube, TikTok, Instagram ou X", tone: "text-amber-300" },
   ].filter((x): x is { href: string; text: string; tone: string } => Boolean(x));
 
   return (

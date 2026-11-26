@@ -133,6 +133,8 @@ def group_lines(words: list[dict], max_chars: int = 16, max_gap: float = 0.6) ->
 
 DEFAULT_STYLE = {"preset": "karaoke", "font": "Montserrat", "size": 92, "color": "#FFFF00", "outline": 7, "position": "bottom"}
 POSITIONS = {"bottom": (2, 520), "middle": (5, 0), "top": (8, 380)}  # (alignement ASS, marge verticale)
+DEFAULT_HOOK = {"font": "Montserrat", "size": 84, "color": "#000000", "bg": "#FFFFFF", "box": True, "position": "top", "upper": False}
+HOOK_POSITIONS = {"bottom": (2, 300), "middle": (5, 0), "top": (8, 200)}
 
 STYLE_FORMAT = (
     "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
@@ -154,8 +156,13 @@ def _ass_text(text: str) -> str:
     return _ass_escape(text.upper())
 
 
+def _bgr(color: str) -> str:
+    rgb = color.lstrip("#")
+    return (rgb[4:6] + rgb[2:4] + rgb[0:2]).upper()  # l'ASS écrit les couleurs en BGR
+
+
 def build_ass(words: list[dict], style: dict | None = None, hook: str = "", watermark: str = "", duration: float = 0,
-              hook_full: bool = False) -> str:
+              hook_full: bool = False, hook_style: dict | None = None) -> str:
     """Tout le texte incrusté : sous-titres, accroche (3 premières secondes, ou tout le clip avec hook_full), filigrane.
 
     Style « karaoke » : la ligne reste affichée, le mot prononcé prend la couleur choisie.
@@ -165,8 +172,12 @@ def build_ass(words: list[dict], style: dict | None = None, hook: str = "", wate
     big = st["preset"] == "big"
     align, margin = POSITIONS[st["position"]]
     font = st["font"]
-    rgb = st["color"].lstrip("#")
-    highlight = "{\\c&H" + (rgb[4:6] + rgb[2:4] + rgb[0:2]).upper() + "&}"  # l'ASS écrit les couleurs en BGR
+    highlight = "{\\c&H" + _bgr(st["color"]) + "&}"
+    hs = {**DEFAULT_HOOK, **(hook_style or {})}
+    h_align, h_margin = HOOK_POSITIONS.get(hs["position"], HOOK_POSITIONS["top"])
+    h_fg, h_bg = _bgr(hs["color"]), _bgr(hs["bg"])
+    # Cartouche : BorderStyle 3, la couleur de contour remplit la boîte. Sinon contour classique et ombre.
+    h_border = "3,18,0" if hs["box"] else f"1,{max(3, round(hs['size'] / 12))},2"
     normal = "{\\c&HFFFFFF&}"
 
     header = "\n".join([
@@ -174,8 +185,8 @@ def build_ass(words: list[dict], style: dict | None = None, hook: str = "", wate
         "[V4+ Styles]", STYLE_FORMAT,
         f"Style: Default,{font},{round(st['size'] * (1.4 if big else 1))},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,"
         f"-1,0,0,0,100,100,0,0,1,{st['outline']},2,{align},60,60,{margin},1",
-        # Accroche : texte noir dans un cartouche blanc, en haut.
-        f"Style: Hook,{font},84,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,80,80,200,1",
+        f"Style: Hook,{hs['font']},{hs['size']},&H00{h_fg},&H00{h_fg},&H00{h_bg},&H80{h_bg if hs['box'] else '000000'},"
+        f"-1,0,0,0,100,100,0,0,{h_border},{h_align},80,80,{h_margin},1",
         # Filigrane : petit, à moitié transparent, en haut à droite.
         f"Style: Mark,{font},40,&H80FFFFFF,&H80FFFFFF,&H80000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,9,40,40,60,1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", "",
@@ -187,7 +198,7 @@ def build_ass(words: list[dict], style: dict | None = None, hook: str = "", wate
     if hook.strip():
         # \q0 : retour à la ligne automatique, seulement pour l'accroche.
         end = duration if hook_full and duration else min(3, duration) if duration else 3
-        events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},Hook,,0,0,0,,{{\\q0\\fad(150,300)}}{_ass_escape(hook.strip())}")
+        events.append(f"Dialogue: 2,{_ass_time(0)},{_ass_time(end)},Hook,,0,0,0,,{{\\q0\\fad(150,300)}}{(_ass_text if hs['upper'] else _ass_escape)(hook.strip())}")
     for line in group_lines(words):
         for i, word in enumerate(line):
             end = line[i + 1]["start"] if i + 1 < len(line) else word["end"]

@@ -10,6 +10,7 @@ const NOTES: Record<Provider, string> = {
   tiktok:
     "Tant que Hooklip n'est pas validé par TikTok, les vidéos sortent en privé. Pour utiliser un son de la bibliothèque TikTok, la vidéo part en brouillon et tu ajoutes le son dans l'appli.",
   instagram: "Compte professionnel ou créateur obligatoire. Les clips sont publiés en Reels.",
+  x: "Le clip part en vidéo avec un texte de 280 caractères au plus. Vidéo de 2 min 20 au plus pour un compte sans abonnement X Premium.",
 };
 
 export default async function NetworksPage({ searchParams }: { searchParams: Promise<{ ok?: string; error?: string }> }) {

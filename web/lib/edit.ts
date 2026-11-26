@@ -31,6 +31,15 @@ export type Edit = {
   musicFade: boolean;
   hook: string;
   hookFull: boolean; // accroche affichée pendant tout le clip au lieu des 3 premières secondes
+  hookStyle: {
+    font: (typeof FONTS)[number];
+    size: number;
+    color: string; // #RRGGBB, couleur du texte
+    bg: string; // #RRGGBB, cartouche ou contour
+    box: boolean; // cartouche plein derrière le texte, sinon simple contour
+    position: (typeof POSITIONS)[number];
+    upper: boolean;
+  };
   progressBar: boolean;
   watermark: string;
   zoomPunch: boolean;
@@ -57,6 +66,7 @@ export const DEFAULT_EDIT: Edit = {
   musicFade: true,
   hook: "",
   hookFull: false,
+  hookStyle: { font: "Montserrat", size: 84, color: "#000000", bg: "#FFFFFF", box: true, position: "top", upper: false },
   progressBar: false,
   watermark: "",
   zoomPunch: false,
@@ -74,6 +84,7 @@ const num = (v: unknown, min: number, max: number, fallback: number) => {
 const pick = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
   allowed.includes(v as T) ? (v as T) : fallback;
 const text = (v: unknown, max: number) => (typeof v === "string" ? v.replace(/[\r\n]+/g, " ").slice(0, max) : "");
+const hex = (v: unknown, fallback: string) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : fallback);
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
 
 /** Ne garde que des valeurs connues et bornées : tout ce qui vient du navigateur passe par ici. */
@@ -81,6 +92,8 @@ export function sanitizeEdit(input: unknown): Edit {
   const i = obj(input);
   const d = DEFAULT_EDIT;
   const style = obj(i.subStyle);
+  const hs = obj(i.hookStyle);
+  const dh = d.hookStyle;
   const cam = obj(i.facecam);
   const hide = obj(i.hide);
   const hw = num(hide.w, 0.02, 1, d.hide.w);
@@ -103,7 +116,7 @@ export function sanitizeEdit(input: unknown): Edit {
       preset: pick(style.preset, PRESETS, d.subStyle.preset),
       font: pick(style.font, FONTS, d.subStyle.font),
       size: Math.round(num(style.size, 40, 160, d.subStyle.size)),
-      color: typeof style.color === "string" && /^#[0-9a-fA-F]{6}$/.test(style.color) ? style.color : d.subStyle.color,
+      color: hex(style.color, d.subStyle.color),
       outline: Math.round(num(style.outline, 0, 16, d.subStyle.outline)),
       position: pick(style.position, POSITIONS, d.subStyle.position),
     },
@@ -113,6 +126,15 @@ export function sanitizeEdit(input: unknown): Edit {
     musicFade: Boolean(i.musicFade),
     hook: text(i.hook, 80),
     hookFull: Boolean(i.hookFull),
+    hookStyle: {
+      font: pick(hs.font, FONTS, dh.font),
+      size: Math.round(num(hs.size, 40, 140, dh.size)),
+      color: hex(hs.color, dh.color),
+      bg: hex(hs.bg, dh.bg),
+      box: hs.box === undefined ? dh.box : Boolean(hs.box),
+      position: pick(hs.position, POSITIONS, dh.position),
+      upper: Boolean(hs.upper),
+    },
     progressBar: Boolean(i.progressBar),
     watermark: text(i.watermark, 40),
     zoomPunch: Boolean(i.zoomPunch),

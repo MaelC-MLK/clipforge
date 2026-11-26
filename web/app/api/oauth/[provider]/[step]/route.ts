@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { getUser } from "@/lib/auth";
 import { encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
-import { APP_URL, authorizeUrl, connect, isConfigured } from "@/lib/oauth";
+import { APP_URL, authorizeUrl, connect, isConfigured, pkceVerifier } from "@/lib/oauth";
 import { isProvider, PROVIDERS } from "@/lib/publish";
 
 const back = (params: Record<string, string>) => Response.redirect(`${APP_URL}/app/reseaux?${new URLSearchParams(params)}`);
@@ -21,19 +21,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ provider
   if (step === "start") {
     // Le `state` lie le retour à ce navigateur : sans lui, un tiers pourrait faire connecter son propre compte.
     const state = randomBytes(16).toString("hex");
-    jar.set(cookie, state, { httpOnly: true, sameSite: "lax", secure: APP_URL.startsWith("https"), path: "/", maxAge: 600 });
-    return Response.redirect(authorizeUrl(provider, state));
+    const options = { httpOnly: true, sameSite: "lax", secure: APP_URL.startsWith("https"), path: "/", maxAge: 600 } as const;
+    jar.set(cookie, state, options);
+    const verifier = pkceVerifier();
+    if (provider === "x") jar.set(`${cookie}_pkce`, verifier, options);
+    return Response.redirect(authorizeUrl(provider, state, verifier));
   }
 
   const query = new URL(req.url).searchParams;
   const expected = jar.get(cookie)?.value;
+  const verifier = jar.get(`${cookie}_pkce`)?.value ?? "";
   jar.delete(cookie);
+  jar.delete(`${cookie}_pkce`);
   if (!expected || query.get("state") !== expected) return back({ error: "Connexion expirée ou invalide. Recommence." });
   const code = query.get("code");
   if (!code) return back({ error: `Connexion refusée par ${PROVIDERS[provider]}.` });
 
   try {
-    const account = await connect(provider, code);
+    const account = await connect(provider, code, verifier);
     const tokens = {
       name: account.name,
       accessToken: encrypt(account.accessToken),
