@@ -11,6 +11,12 @@ const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 /** Inscriptions fermées par défaut ; SIGNUPS_OPEN=1 les ouvre. Les comptes existants se connectent toujours. */
 export const signupsOpen = () => process.env.SIGNUPS_OPEN === "1";
 
+/** Propriétaire de l'instance (SUBSCRIPTION_EMAIL) : seul à régler ce qui vaut pour tout le serveur. */
+export const isOwner = (user: { email: string }) => {
+  const owner = (process.env.SUBSCRIPTION_EMAIL ?? "").trim().toLowerCase();
+  return owner !== "" && user.email === owner;
+};
+
 export async function createSession(userId: string) {
   const token = randomBytes(32).toString("hex");
   await db.session.create({

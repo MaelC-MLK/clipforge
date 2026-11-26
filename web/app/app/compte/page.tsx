@@ -1,9 +1,10 @@
-import { requireUser } from "@/lib/auth";
+import { stat } from "node:fs/promises";
+import { isOwner, requireUser } from "@/lib/auth";
 import { usesSubscription } from "@/lib/claude";
 import { db } from "@/lib/db";
-import { quotaBytes, usedBytes } from "@/lib/storage";
+import { abs, quotaBytes, usedBytes, YOUTUBE_COOKIES } from "@/lib/storage";
 import { KeyGuide } from "../../key-guide";
-import { AccountForm, KeyForm, PasswordForm } from "./forms";
+import { AccountForm, KeyForm, PasswordForm, YoutubeCookiesForm } from "./forms";
 
 function Meter({ label, value, max, unit }: { label: string; value: number; max: number; unit: string }) {
   const percent = max > 0 ? Math.min(100, (value / max) * 100) : 0;
@@ -26,6 +27,8 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
   const user = await requireUser();
   const { bienvenue } = await searchParams;
   const subscription = usesSubscription(user);
+  const owner = isOwner(user);
+  const cookies = owner ? await stat(abs(YOUTUBE_COOKIES)).catch(() => null) : null;
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const [used, month] = await Promise.all([
@@ -42,7 +45,7 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
       <h1 className="page-title">Utilisation et compte</h1>
       {bienvenue && (
         <p role="status" className="rounded-lg border border-violet-800/60 bg-violet-950/40 p-4 text-sm text-violet-100">
-          Bienvenue ! Ton compte est créé. Tu peux déjà importer une vidéo depuis la Bibliothèque. Pour l&apos;analyse automatique et les textes de
+          Bienvenue ! Ton compte est créé. Tu peux déjà importer une vidéo depuis Fast clip ou Découper. Pour l&apos;analyse automatique et les textes de
           publication, ajoute ta clé API Claude ci-dessous.
         </p>
       )}
@@ -97,6 +100,31 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
         <h2 className="text-lg font-semibold">Budget et stockage</h2>
         <AccountForm budget={user.monthlyBudgetUsd} purgeDays={user.purgeDays} />
       </section>
+
+      {owner && (
+        <section id="youtube" className="card scroll-mt-6">
+          <h2 className="text-lg font-semibold">Imports YouTube (serveur)</h2>
+          <p className="mt-1 text-sm text-zinc-400">
+            YouTube bloque souvent les téléchargements depuis un serveur, et toujours les vidéos à restriction d&apos;âge, sans compte connecté.
+            Dépose ici les cookies d&apos;un compte YouTube : ils servent à tous les imports. Utilise un compte secondaire, pas ton compte
+            principal.
+          </p>
+          <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-zinc-300">
+            <li>Dans une fenêtre de navigation privée, connecte-toi à YouTube avec le compte secondaire.</li>
+            <li>
+              Exporte les cookies de youtube.com au format Netscape avec une extension comme « Get cookies.txt LOCALLY », puis ferme la fenêtre
+              privée sans te déconnecter.
+            </li>
+            <li>Envoie le fichier ci-dessous. Il reste sur le serveur et n&apos;est jamais renvoyé au navigateur.</li>
+          </ol>
+          <p className={`mt-3 text-sm ${cookies ? "text-emerald-400" : "text-amber-300"}`}>
+            {cookies
+              ? `Cookies enregistrés le ${cookies.mtime.toLocaleDateString("fr-FR", { timeZone: "UTC" })}. S'ils expirent, les imports YouTube échouent avec un message qui le dit.`
+              : "Aucun cookie enregistré : les imports YouTube risquent d'échouer."}
+          </p>
+          <YoutubeCookiesForm saved={Boolean(cookies)} />
+        </section>
+      )}
 
       <section className="card">
         <h2 className="text-lg font-semibold">Compte</h2>

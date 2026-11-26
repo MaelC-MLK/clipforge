@@ -506,7 +506,7 @@ export function Editor({
                 </div>
               )}
               {sources.length === 0 && (
-                <p className="col-span-2 text-xs text-zinc-500">Importe une autre vidéo dans la bibliothèque (gameplay, par exemple) pour l&apos;empiler ici.</p>
+                <p className="col-span-2 text-xs text-zinc-500">Importe une autre vidéo dans Découper (gameplay, par exemple) pour l&apos;empiler ici.</p>
               )}
             </div>
           )}

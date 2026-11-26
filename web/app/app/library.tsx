@@ -41,10 +41,9 @@ const Bar = ({ progress }: { progress: number }) => (
   </div>
 );
 
-export function Library({ initial }: { initial: LibraryState }) {
+/** Deux pages sur les mêmes données, tenues à jour en direct : les sources à découper, ou les vidéos prêtes à publier. */
+export function Library({ initial, view }: { initial: LibraryState; view: "sources" | "videos" }) {
   const [{ sources, clips }, setState] = useState(initial);
-  const [tab, setTab] = useState<"sources" | "finals">("sources");
-  const [final, setFinal] = useState(false); // type du prochain import
   const [playing, setPlaying] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const asked = useRef(new Set<string>()); // vidéos finales dont le clip a déjà été demandé
@@ -69,64 +68,55 @@ export function Library({ initial }: { initial: LibraryState }) {
     }
   }, [sources, clips]);
 
-  const choice = (value: boolean, label: string, hint: string) => (
-    <button
-      type="button"
-      aria-pressed={final === value}
-      onClick={() => {
-        setFinal(value);
-        setTab(value ? "finals" : "sources");
-      }}
-      className={`flex-1 rounded-xl border px-4 py-3 text-left transition ${final === value ? "border-violet-400/60 bg-violet-500/15" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"}`}
-    >
-      <span className="block text-sm font-medium">{label}</span>
-      <span className="block text-xs text-zinc-400">{hint}</span>
-    </button>
-  );
-  const tabButton = (value: typeof tab, label: string, count: number) => (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === value}
-      onClick={() => setTab(value)}
-      className={`rounded-lg px-4 py-2 text-sm transition ${tab === value ? "bg-white/10 font-medium text-white" : "text-zinc-400 hover:text-white"}`}
-    >
-      {label} <span className="text-zinc-500">· {count}</span>
-    </button>
-  );
   const empty = (text: string) => <p className="rounded-2xl border border-dashed border-white/15 px-5 py-10 text-center text-sm text-zinc-400">{text}</p>;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="page-title">Bibliothèque</h1>
-        <p className="mt-1 text-sm text-zinc-400">Tes vidéos à découper d&apos;un côté, tes vidéos prêtes à publier de l&apos;autre.</p>
-      </div>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Importer</h2>
-        <div className="flex flex-col gap-3 sm:flex-row">
-          {choice(false, "Une source à découper", "Live, VOD, longue vidéo : tu en tires des clips.")}
-          {choice(true, "Une vidéo déjà montée", `Prête à publier telle quelle, ${MAX_CLIP_SECONDS / 60} minutes au plus.`)}
+      {view === "sources" ? (
+        <>
+          <div>
+            <h1 className="page-title">Découper</h1>
+            <p className="mt-1 text-sm text-zinc-400">
+              Importe une longue vidéo (live, VOD, reportage), puis ouvre-la pour en tirer des clips : à la main, par l&apos;analyse des
+              meilleurs moments ou en découpage automatique. Les clips rendus arrivent dans Vidéos prêtes.
+            </p>
+          </div>
+          <section className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
+              <UrlForm />
+              <UploadForm />
+            </div>
+            <p className="text-xs text-zinc-500">
+              Vidéo courte déjà montée ? Passe plutôt par{" "}
+              <Link href="/app/fast" className="text-violet-300 hover:underline">
+                Fast clip
+              </Link>
+              . Rappel : n&apos;importe que du contenu dont tu détiens les droits ou l&apos;autorisation du créateur.
+            </p>
+          </section>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1">
+            <h1 className="page-title">Vidéos prêtes</h1>
+            <p className="mt-1 text-sm text-zinc-400">Tous tes clips rendus, à publier, programmer ou télécharger.</p>
+          </div>
+          <Link href="/app/fast" className="btn">
+            Nouveau fast clip
+          </Link>
+          <Link href="/app/sources" className="btn-ghost">
+            Découper une vidéo
+          </Link>
         </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <UrlForm final={final} />
-          <UploadForm final={final} />
-        </div>
-        <p className="text-xs text-zinc-500">
-          Rappel : n&apos;importe que du contenu dont tu détiens les droits ou pour lequel tu as l&apos;autorisation du créateur.
-        </p>
-      </section>
+      )}
 
       <section>
-        <div role="tablist" className="mb-3 inline-flex gap-1 rounded-xl border border-white/10 bg-black/20 p-1">
-          {tabButton("sources", "Sources", raw.length)}
-          {tabButton("finals", "Vidéos finales", clips.length + pending.length)}
-        </div>
-
-        {tab === "sources" && (
+        {view === "sources" && (
           <>
-            {raw.length === 0 && empty("Aucune source. Importe une vidéo à découper ci-dessus.")}
+            <h2 className="mb-3 text-lg font-semibold">
+              Mes sources <span className="text-sm font-normal text-zinc-500">· {raw.length}</span>
+            </h2>
+            {raw.length === 0 && empty("Aucune source pour l'instant. Importe une longue vidéo ci-dessus.")}
             <ul className="space-y-2">
               {raw.map((s) => (
                 <li key={s.id} className="card">
@@ -179,9 +169,9 @@ export function Library({ initial }: { initial: LibraryState }) {
           </>
         )}
 
-        {tab === "finals" && (
+        {view === "videos" && (
           <>
-            {clips.length + pending.length === 0 && empty("Aucune vidéo finale. Importe une vidéo déjà montée, ou crée des clips depuis une source.")}
+            {clips.length + pending.length === 0 && empty("Aucune vidéo prête. Crée un fast clip, ou tire des clips d'une longue vidéo dans Découper.")}
             <ul className="grid gap-3 sm:grid-cols-2">
               {pending.map((s) => (
                 <li key={s.id} className="card">
@@ -269,7 +259,7 @@ export function Library({ initial }: { initial: LibraryState }) {
   );
 }
 
-function UrlForm({ final }: { final: boolean }) {
+function UrlForm() {
   const [state, action, pending] = useActionState(importUrl, {});
   return (
     <form action={action} className="card space-y-3">
@@ -277,7 +267,6 @@ function UrlForm({ final }: { final: boolean }) {
         Depuis une URL
       </label>
       <input id="url" name="url" type="url" required placeholder="https://www.youtube.com/watch?v=…" className="input" />
-      {final && <input type="hidden" name="final" value="1" />}
       <p className="text-xs text-zinc-500">YouTube, VOD Twitch, VOD Kick ou tout site supporté par yt-dlp. La vidéo est téléchargée et gardée dans ton espace.</p>
       {state.error && (
         <p role="alert" className="text-sm text-red-400">
@@ -291,7 +280,7 @@ function UrlForm({ final }: { final: boolean }) {
   );
 }
 
-function UploadForm({ final }: { final: boolean }) {
+function UploadForm() {
   const input = useRef<HTMLInputElement>(null);
   const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -299,7 +288,7 @@ function UploadForm({ final }: { final: boolean }) {
   async function upload(file: File) {
     setError("");
     setPercent(0);
-    const result = await uploadVideo(file, final, setPercent);
+    const result = await uploadVideo(file, false, setPercent);
     setPercent(null);
     if ("error" in result) return setError(result.error);
     if (input.current) input.current.value = "";

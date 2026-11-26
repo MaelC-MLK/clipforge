@@ -12,7 +12,7 @@ from publish import MB, clip_bytes, public_token, tiktok_chunks
 from render import (build_ass, build_srt, crop_size, crop_x_expr, group_lines, keep_intervals, loud_peaks, remap_time,
                     remap_words, render_cmd, select_expr, smooth, speech_segments, voice_cmd)
 import worker
-from worker import Fatal, check_duration, niche_clips, proxy_cmd
+from worker import Fatal, check_duration, download_error, niche_clips, proxy_cmd
 
 MASTER_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 # Même vecteur que web/lib/crypto.test.ts.
@@ -438,6 +438,18 @@ class HideZoneTest(unittest.TestCase):
         # Mode split : la facecam et le jeu viennent tous deux de l'image floutée.
         split = render_cmd(Path("/s.mp4"), Path("/o.mp4"), 0, 10, (1920, 1080), "30", {**edit, "crop": "split"}, [(0.0, 0.5)])
         self.assertIn("[src]split[m0][c0]", split[split.index("-filter_complex") + 1])
+
+
+class DownloadErrorTest(unittest.TestCase):
+    def test_youtube_refusals(self):
+        age = download_error("ERROR: [youtube] x: Sign in to confirm your age. This video may be inappropriate", False)
+        self.assertIsInstance(age, Fatal)
+        self.assertIn("réservée aux adultes", str(age))
+        self.assertIn("page Compte", str(age))
+        bot = download_error("ERROR: [youtube] x: Sign in to confirm you’re not a bot.", True)
+        self.assertIn("renouvelle", str(bot))
+        # Erreur inconnue : réessayable.
+        self.assertNotIsInstance(download_error("HTTP Error 503", False), Fatal)
 
 
 if __name__ == "__main__":

@@ -98,6 +98,24 @@ def free_quota(conn, user_id: str, source_id: str = "") -> int:
     return int(row["free"]) if row else 0
 
 
+# Cookies d'un compte YouTube, déposés par le propriétaire depuis la page Compte (web/app/actions.ts).
+# Sans eux, YouTube bloque souvent les serveurs (« not a bot ») et toujours les vidéos à restriction d'âge.
+YOUTUBE_COOKIES = DATA / "_admin" / "youtube-cookies.txt"
+
+
+def download_error(message: str, has_cookies: bool) -> Exception:
+    """Message clair pour les refus connus de YouTube ; les autres erreurs restent réessayables."""
+    fix = ("Les cookies YouTube enregistrés ne sont plus valides : renouvelle-les dans Compte." if has_cookies
+           else "Il faut connecter un compte YouTube au serveur (cookies, page Compte du propriétaire).")
+    if "confirm your age" in message:
+        return Fatal(f"Vidéo réservée aux adultes : YouTube exige un compte connecté. {fix}")
+    if "not a bot" in message or "Sign in to confirm" in message:
+        return Fatal(f"YouTube bloque le téléchargement depuis le serveur. {fix}")
+    if "Private video" in message or "Video unavailable" in message:
+        return Fatal("Vidéo privée ou indisponible : vérifie le lien.")
+    return RuntimeError(f"Téléchargement impossible. Vérifie le lien. Détail : {message}")
+
+
 def check_duration(seconds: float):
     if seconds > MAX_HOURS * 3600:
         raise Fatal(f"Vidéo trop longue : {seconds / 3600:.1f} h (maximum {MAX_HOURS:g} h).")
@@ -160,6 +178,12 @@ def ingest(conn, job):
             # shortcut: yt-dlp ne respecte la limite que si le site annonce la taille ; la vérification après coup reste.
             "max_filesize": max(1, free_quota(conn, src["userId"], src["id"])),
         }
+        # yt-dlp réécrit le fichier de cookies : il travaille sur une copie.
+        cookies = None
+        if YOUTUBE_COOKIES.is_file():
+            cookies = folder / "cookies.txt"
+            shutil.copyfile(YOUTUBE_COOKIES, cookies)
+            options["cookiefile"] = str(cookies)
         try:
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(src["url"], download=False)
@@ -167,8 +191,10 @@ def ingest(conn, job):
                 conn.execute('UPDATE "Source" SET title = %s WHERE id = %s', [(info.get("title") or src["url"])[:200], src["id"]])
                 ydl.download([src["url"]])
         except yt_dlp.utils.DownloadError as e:
-            # Réessayable : peut être une coupure réseau passagère.
-            raise RuntimeError(f"Téléchargement impossible. Vérifie l'URL et que la vidéo est publique. Détail : {e}")
+            raise download_error(str(e), cookies is not None)
+        finally:
+            if cookies:
+                cookies.unlink(missing_ok=True)
         file = next((p for p in folder.glob("source.*") if p.suffix != ".part"), None)
         if file is None:  # yt-dlp a refusé le fichier, trop lourd pour le quota restant
             raise Fatal("Vidéo trop lourde pour l'espace qu'il te reste. Supprime des sources ou des clips, puis réessaie.")

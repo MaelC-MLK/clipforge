@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { usesSubscription } from "@/lib/claude";
 import { db } from "@/lib/db";
 import { logout } from "../actions";
-import { Nav } from "./nav";
+import { MobileNav, SideNav } from "./nav";
 
 const Logo = ({ className = "" }: { className?: string }) => (
   <Link href="/app" className={`text-xl font-bold ${className}`}>
@@ -23,10 +23,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <button className="btn-ghost">Se déconnecter</button>
         </form>
       </header>
-      <aside className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-[#07060e]/90 backdrop-blur md:inset-y-0 md:right-auto md:flex md:w-60 md:flex-col md:border-r md:border-t-0 md:bg-black/25">
-        <Logo className="hidden px-6 py-6 md:block" />
-        <Nav failed={failed} />
-        <div className="hidden space-y-3 border-t border-white/10 p-4 md:block">
+      <div className="fixed inset-x-0 bottom-0 z-20 border-t border-white/10 bg-[#07060e]/95 backdrop-blur md:hidden">
+        <MobileNav failed={failed} />
+      </div>
+      <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 flex-col border-r border-white/10 bg-black/25 md:flex">
+        <Logo className="px-6 py-6" />
+        <SideNav failed={failed} />
+        <div className="space-y-3 border-t border-white/10 p-4">
           <div className="flex items-center gap-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-blue-600 text-sm font-semibold uppercase">
               {user.email[0]}

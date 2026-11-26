@@ -1,16 +1,17 @@
 "use server";
 
 import { createHash, randomBytes } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { createSession, destroySession, requireUser, signupsOpen } from "@/lib/auth";
+import { createSession, destroySession, isOwner, requireUser, signupsOpen } from "@/lib/auth";
 import { checkKey, generateClipMeta, usesSubscription } from "@/lib/claude";
 import { costUsd, estimateAnalysisUsd, monthSpentUsd } from "@/lib/cost";
 import { decrypt, encrypt } from "@/lib/crypto";
 import { db } from "@/lib/db";
-import { abs, listMusic, storageError } from "@/lib/storage";
+import { abs, listMusic, storageError, YOUTUBE_COOKIES } from "@/lib/storage";
 import { mailConfigured, sendMail } from "@/lib/mail";
 import { APP_URL } from "@/lib/oauth";
 import { type Edit, MAX_PARTS, MIN_PART_SECONDS, sanitizeEdit, sanitizeWords, splitParts, type Word } from "@/lib/edit";
@@ -702,4 +703,29 @@ export async function fastClip(input: { sourceId: string; title: string; edit: u
   const result = await newClip({ sourceId: source.id, title, start: 0, end: source.duration, edit: input.edit });
   if ("error" in result) return result;
   redirect(`/app/clips/${result.id}/publier`);
+}
+
+// --- Cookies YouTube du serveur (propriétaire seulement) ---
+
+export async function saveYoutubeCookies(_: FormState, form: FormData): Promise<FormState> {
+  const user = await requireUser();
+  if (!isOwner(user)) return { error: "Réservé au propriétaire." };
+  const file = form.get("cookies");
+  if (!(file instanceof File) || file.size === 0) return { error: "Choisis le fichier cookies.txt." };
+  if (file.size > 1024 * 1024) return { error: "Fichier trop gros pour un fichier de cookies." };
+  const text = await file.text();
+  if (!/^# (Netscape )?HTTP Cookie File/.test(text.trimStart()) || !text.includes(".youtube.com"))
+    return { error: "Ce n'est pas un export de cookies YouTube au format Netscape (cookies.txt)." };
+  const target = abs(YOUTUBE_COOKIES);
+  await mkdir(path.dirname(target), { recursive: true });
+  await writeFile(target, text, { mode: 0o600 });
+  revalidatePath("/app/compte");
+  return { ok: "Cookies enregistrés : les prochains imports YouTube les utilisent." };
+}
+
+export async function deleteYoutubeCookies() {
+  const user = await requireUser();
+  if (!isOwner(user)) return;
+  await rm(abs(YOUTUBE_COOKIES), { force: true });
+  revalidatePath("/app/compte");
 }

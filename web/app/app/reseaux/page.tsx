@@ -61,7 +61,7 @@ export default async function NetworksPage({ searchParams }: { searchParams: Pro
             <p className="text-xs text-zinc-500">{NOTES[provider]}</p>
             {!isConfigured(provider) && (
               <p className="text-xs text-zinc-500">
-                La connexion à {PROVIDERS[provider]} n&apos;est pas encore ouverte. En attendant, télécharge tes clips depuis la bibliothèque et
+                La connexion à {PROVIDERS[provider]} n&apos;est pas encore ouverte. En attendant, télécharge tes clips depuis Vidéos prêtes et
                 publie-les à la main.
               </p>
             )}

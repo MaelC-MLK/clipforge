@@ -6,6 +6,8 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR ?? "../data");
 
 /** Chemin absolu d'un chemin relatif stocké en base (toujours avec des `/`). */
 export const abs = (rel: string) => path.join(DATA_DIR, rel);
+// Cookies d'un compte YouTube pour les imports par lien (lus par worker/worker.py).
+export const YOUTUBE_COOKIES = "_admin/youtube-cookies.txt";
 
 /** Espace occupé : sources et clips en base, plus les envois en cours (fichiers .part). */
 export async function usedBytes(userId: string): Promise<number> {

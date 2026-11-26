@@ -16,8 +16,8 @@ export default async function SourcePage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-4">
-      <Link href="/app" className="text-sm text-zinc-400 hover:text-zinc-200">
-        ← Bibliothèque
+      <Link href="/app/sources" className="text-sm text-zinc-400 hover:text-zinc-200">
+        ← Découper
       </Link>
       <h1 className="page-title truncate">{source.title}</h1>
       <Editor

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useActionState } from "react";
 import { MIN_PASSWORD } from "@/lib/upload";
-import { changePassword, removeKey, saveAccount, saveKey, type FormState } from "../../actions";
+import { changePassword, deleteYoutubeCookies, removeKey, saveAccount, saveKey, saveYoutubeCookies, type FormState } from "../../actions";
 
 function Message({ state }: { state: FormState }) {
   if (state.error) return <p role="alert" className="text-sm text-red-400">{state.error}</p>;
@@ -94,6 +94,35 @@ export function PasswordForm() {
       <button className="btn" disabled={pending}>
         Changer le mot de passe
       </button>
+    </form>
+  );
+}
+
+export function YoutubeCookiesForm({ saved }: { saved: boolean }) {
+  const router = useRouter();
+  const [state, action, pending] = useActionState(saveYoutubeCookies, {});
+  return (
+    <form action={action} className="mt-4 max-w-md space-y-3">
+      <input name="cookies" type="file" accept=".txt,text/plain" required className="block w-full text-sm text-zinc-300 file:mr-3 file:rounded-lg file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-zinc-100" />
+      <Message state={state} />
+      <div className="flex flex-wrap gap-2">
+        <button className="btn" disabled={pending}>
+          {pending ? "Envoi…" : saved ? "Remplacer les cookies" : "Enregistrer les cookies"}
+        </button>
+        {saved && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={async () => {
+              if (!confirm("Retirer les cookies YouTube du serveur ?")) return;
+              await deleteYoutubeCookies();
+              router.refresh();
+            }}
+          >
+            Retirer
+          </button>
+        )}
+      </div>
     </form>
   );
 }

@@ -31,7 +31,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="page-title">Tableau de bord</h1>
+      <h1 className="page-title">Statistiques</h1>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {tiles.map(([label, value]) => (
