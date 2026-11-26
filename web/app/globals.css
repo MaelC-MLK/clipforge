@@ -76,38 +76,3 @@ body {
     #07060e;
   background-attachment: fixed;
 }
-
-.phone {
-  aspect-ratio: 9 / 16;
-  background: linear-gradient(160deg, #1e1b4b, #312e81 38%, #1d4ed8 78%, #0f172a);
-  box-shadow:
-    0 40px 90px -30px rgb(99 102 241 / 0.75),
-    0 0 0 1px rgb(255 255 255 / 0.12),
-    inset 0 0 60px rgb(0 0 0 / 0.35);
-}
-
-@keyframes float {
-  50% {
-    transform: translateY(-8px);
-  }
-}
-.float {
-  animation: float 6s ease-in-out infinite;
-}
-@keyframes progress {
-  from {
-    width: 8%;
-  }
-  to {
-    width: 100%;
-  }
-}
-.progress {
-  animation: progress 9s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .float,
-  .progress {
-    animation: none;
-  }
-}

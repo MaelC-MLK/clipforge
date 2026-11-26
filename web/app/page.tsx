@@ -62,7 +62,7 @@ export default async function Landing() {
       </header>
 
       <main>
-        <section className="mx-auto grid max-w-6xl items-center gap-12 px-5 pb-20 pt-12 lg:grid-cols-[1.15fr_1fr] lg:pt-20">
+        <section className="mx-auto max-w-4xl px-5 pb-20 pt-16 text-center lg:pt-24">
           <div>
             <p className="inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/10 px-3 py-1 text-xs font-medium text-violet-200">
               <span className="h-1.5 w-1.5 rounded-full bg-violet-400" />
@@ -71,11 +71,11 @@ export default async function Landing() {
             <h1 className="mt-5 text-4xl font-extrabold leading-[1.08] tracking-tight sm:text-6xl">
               De la VOD de six heures au <span className="gradient-text">clip qui tourne.</span>
             </h1>
-            <p className="mt-5 max-w-xl text-lg text-zinc-300">
+            <p className="mx-auto mt-5 max-w-2xl text-lg text-zinc-300">
               Hooklip trouve les meilleurs moments de tes lives, les recadre à la verticale, les sous-titre et les publie sur TikTok, Reels et
               Shorts. Tout au même endroit.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
               <Link href={primary.href} className="btn-primary">
                 {primary.label}
               </Link>
@@ -84,46 +84,6 @@ export default async function Landing() {
               </a>
             </div>
             <p className="mt-5 text-sm text-zinc-500">Sans abonnement. Le montage et le rendu sont gratuits ; seule l&apos;analyse par Claude utilise ta propre clé.</p>
-          </div>
-
-          {/* Maquette dessinée en CSS : un clip vertical et ce que Hooklip fait autour. */}
-          <div className="relative mx-auto w-full max-w-sm" aria-hidden="true">
-            <div className="phone relative mx-auto w-56 overflow-hidden rounded-[2rem] sm:w-64">
-              <div className="absolute inset-x-0 top-5 flex justify-center">
-                <span className="rounded-md bg-white px-2.5 py-1 text-[11px] font-bold text-black">Il ne s&apos;y attendait pas</span>
-              </div>
-              <span className="absolute right-3 top-14 text-[10px] font-semibold text-white/50">@tachaine</span>
-              <div className="absolute left-1/2 top-[30%] h-24 w-24 -translate-x-1/2 rounded-full bg-gradient-to-br from-violet-300/90 to-blue-400/80 blur-[1px]" />
-              <div className="absolute left-1/2 top-[47%] h-32 w-40 -translate-x-1/2 rounded-t-[3rem] bg-gradient-to-b from-violet-400/50 to-transparent" />
-              <p className="absolute inset-x-0 bottom-[30%] text-center text-xl font-black tracking-tight text-white [text-shadow:0_2px_0_#000,0_0_12px_rgb(0_0_0/0.6)]">
-                ATTENDS, <span className="text-yellow-300">QUOI</span> ?!
-              </p>
-              <div className="absolute inset-x-0 bottom-0 h-1.5 bg-white/10">
-                <div className="progress h-full bg-yellow-300" />
-              </div>
-            </div>
-
-            <div className="glass float absolute -left-2 top-12 w-44 p-3 sm:-left-16">
-              <p className="text-[11px] font-medium text-zinc-400">Meilleurs moments</p>
-              <div className="mt-2 flex h-6 items-end gap-[3px]">
-                {[20, 35, 25, 60, 95, 70, 30, 22, 48, 85, 55, 28, 18, 40].map((h, i) => (
-                  <span key={i} className="flex-1 rounded-sm bg-gradient-to-t from-violet-600 to-blue-400" style={{ height: `${h}%`, opacity: 0.35 + h / 150 }} />
-                ))}
-              </div>
-              <p className="mt-2 text-xs text-zinc-200">
-                Score <span className="font-semibold text-violet-300">87 / 100</span>
-              </p>
-            </div>
-
-            <div className="glass float absolute -right-2 bottom-6 w-48 p-3 [animation-delay:-3s] sm:-right-16">
-              <p className="text-[11px] font-medium text-zinc-400">Planifié</p>
-              <p className="mt-1 text-sm font-semibold">Ce soir, 18:30</p>
-              <div className="mt-2 flex gap-1.5 text-[10px] font-medium">
-                <span className="rounded bg-white/10 px-1.5 py-0.5">TikTok</span>
-                <span className="rounded bg-white/10 px-1.5 py-0.5">Reels</span>
-                <span className="rounded bg-white/10 px-1.5 py-0.5">Shorts</span>
-              </div>
-            </div>
           </div>
         </section>
 
