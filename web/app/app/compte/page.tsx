@@ -110,13 +110,14 @@ export default async function AccountPage({ searchParams }: { searchParams: Prom
             principal.
           </p>
           <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-zinc-300">
-            <li>Dans une fenêtre de navigation privée, connecte-toi à YouTube avec le compte secondaire.</li>
-            <li>
-              Exporte les cookies de youtube.com au format Netscape avec une extension comme « Get cookies.txt LOCALLY », puis ferme la fenêtre
-              privée sans te déconnecter.
-            </li>
-            <li>Envoie le fichier ci-dessous. Il reste sur le serveur et n&apos;est jamais renvoyé au navigateur.</li>
+            <li>Dans Chrome, clique sur ton avatar en haut à droite, puis Ajouter → Continuer sans compte. Nomme le profil « Hooklip ».</li>
+            <li>Dans ce nouveau profil, installe l&apos;extension « Get cookies.txt LOCALLY » depuis le Chrome Web Store.</li>
+            <li>Va sur youtube.com et connecte-toi avec le compte secondaire.</li>
+            <li>Lance une vidéo quelques secondes, puis clique sur l&apos;extension → Export : tu obtiens youtube.com_cookies.txt.</li>
+            <li>Ferme la fenêtre de ce profil sans te déconnecter, et ne la rouvre plus sur YouTube : YouTube renouvellerait les cookies.</li>
+            <li>Dans ton navigateur habituel, envoie le fichier ci-dessous. Il reste sur le serveur et n&apos;est jamais renvoyé au navigateur.</li>
           </ol>
+          <p className="mt-2 text-xs text-zinc-500">Si les imports YouTube échouent à nouveau avec « cookies plus valides », rouvre ce profil et refais les étapes 4 à 6.</p>
           <p className={`mt-3 text-sm ${cookies ? "text-emerald-400" : "text-amber-300"}`}>
             {cookies
               ? `Cookies enregistrés le ${cookies.mtime.toLocaleDateString("fr-FR", { timeZone: "UTC" })}. S'ils expirent, les imports YouTube échouent avec un message qui le dit.`
